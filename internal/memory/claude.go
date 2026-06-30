@@ -1,0 +1,200 @@
+package memory
+
+import (
+	"bufio"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"time"
+)
+
+/*
+Claude Code session JSONL format
+
+Claude Code stores project sessions under ~/.claude/projects/<project>/*.jsonl.
+Each line is a top-level record with a "type" field. Message records commonly
+carry sessionId, cwd, timestamp, and message.role/message.content.
+*/
+
+func claudeSource(uri string, raw []byte, recordedAt time.Time) (Source, []SourceEvent, error) {
+	if !looksLikeClaudeCodeSession(raw) {
+		return Source{}, nil, fmt.Errorf("%w: claude code session", errUnsupportedSession)
+	}
+
+	events, meta, err := parseClaudeCodeEvents(bytes.NewReader(raw))
+	if err != nil {
+		return Source{}, nil, err
+	}
+
+	sum := sha256.Sum256(raw)
+	hash := hex.EncodeToString(sum[:])
+	source := Source{
+		ID:            SourceID("claude_code_session:" + hash),
+		Kind:          SourceKindClaudeCodeSession,
+		URI:           uri,
+		ContentSHA256: hash,
+		Scope: Scope{
+			Kind:  ScopeKindWorkspace,
+			Value: meta.CWD,
+		},
+		StartedAt:    firstEventTime(events),
+		EndedAt:      lastEventTime(events),
+		RecordedAt:   recordedAt,
+		MetadataJSON: mustMarshalJSON(meta),
+	}
+
+	for i := range events {
+		events[i].SourceID = source.ID
+		events[i].Index = i
+	}
+
+	return source, events, nil
+}
+
+func looksLikeClaudeCodeSession(raw []byte) bool {
+	record := firstJSONLRecord(raw)
+	if len(record) == 0 {
+		return false
+	}
+
+	var event claudeCodeRecord
+	if err := json.Unmarshal(record, &event); err != nil {
+		return false
+	}
+	return event.Type != ""
+}
+
+type claudeCodeMeta struct {
+	SessionID string `json:"session_id,omitempty"`
+	CWD       string `json:"cwd,omitempty"`
+	Version   string `json:"version,omitempty"`
+	GitBranch string `json:"git_branch,omitempty"`
+}
+
+func (m *claudeCodeMeta) merge(update claudeCodeMeta) {
+	if update.SessionID != "" {
+		m.SessionID = update.SessionID
+	}
+	if update.CWD != "" {
+		m.CWD = update.CWD
+	}
+	if update.Version != "" {
+		m.Version = update.Version
+	}
+	if update.GitBranch != "" {
+		m.GitBranch = update.GitBranch
+	}
+}
+
+type claudeCodeRecord struct {
+	Type       string            `json:"type"`
+	SessionID  string            `json:"sessionId"`
+	Timestamp  string            `json:"timestamp"`
+	CWD        string            `json:"cwd"`
+	Version    string            `json:"version"`
+	GitBranch  string            `json:"gitBranch"`
+	Message    claudeCodeMessage `json:"message"`
+	Attachment json.RawMessage   `json:"attachment"`
+}
+
+type claudeCodeMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+type claudeCodeContentPart struct {
+	Text string `json:"text"`
+}
+
+func parseClaudeCodeEvents(r io.Reader) ([]SourceEvent, claudeCodeMeta, error) {
+	reader := bufio.NewReader(r)
+	var events []SourceEvent
+	var meta claudeCodeMeta
+	lineNumber := 0
+
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			lineNumber++
+			event, update, parseErr := parseClaudeCodeLine(lineNumber, line)
+			if parseErr != nil {
+				return nil, claudeCodeMeta{}, parseErr
+			}
+			meta.merge(update)
+			events = append(events, event)
+		}
+		if err == nil {
+			continue
+		}
+		if err == io.EOF {
+			break
+		}
+		return nil, claudeCodeMeta{}, fmt.Errorf("read claude code session: %w", err)
+	}
+	if len(events) == 0 {
+		return nil, claudeCodeMeta{}, fmt.Errorf("empty claude code session")
+	}
+	return events, meta, nil
+}
+
+func parseClaudeCodeLine(lineNumber int, line []byte) (SourceEvent, claudeCodeMeta, error) {
+	raw := bytes.TrimSpace(line)
+	if len(raw) == 0 {
+		return SourceEvent{}, claudeCodeMeta{}, nil
+	}
+
+	var record claudeCodeRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return SourceEvent{}, claudeCodeMeta{}, fmt.Errorf("parse claude code session line %d: %w", lineNumber, err)
+	}
+	if record.Type == "" {
+		return SourceEvent{}, claudeCodeMeta{}, fmt.Errorf("parse claude code session line %d: missing type", lineNumber)
+	}
+
+	return SourceEvent{
+			Line:        lineNumber,
+			At:          parseCodexTime(record.Timestamp),
+			Type:        record.Type,
+			Role:        record.Message.Role,
+			Text:        claudeCodeMessageText(record.Message.Content),
+			PayloadJSON: cloneJSON(raw),
+			RawJSON:     cloneJSON(raw),
+		}, claudeCodeMeta{
+			SessionID: record.SessionID,
+			CWD:       record.CWD,
+			Version:   record.Version,
+			GitBranch: record.GitBranch,
+		}, nil
+}
+
+func claudeCodeMessageText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []claudeCodeContentPart
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	return contentPartText(parts)
+}
+
+func contentPartText(parts []claudeCodeContentPart) string {
+	var text string
+	for _, part := range parts {
+		if part.Text == "" {
+			continue
+		}
+		if text != "" {
+			text += "\n"
+		}
+		text += part.Text
+	}
+	return text
+}

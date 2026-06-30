@@ -1,12 +1,22 @@
 # my
 
-my는 아래와 같은 기능을 제공하는 프로젝트입니다.
+`my`는 코딩 에이전트 세션을 장기 기억으로 축적하기 위한 로컬 CLI입니다.
 
-- Memory 
-  - graph 메모리 저장 기능을 제공합니다.
-  - mcp 를 통해 LLM 에이전트가 메모리의 접근 및 기록할 수 있게 합니다.
-  - claude code hooks 을 통해 세션을 ingest 하는 역할을 수행합니다.
-- Agent
-  - Loop
-    - Loop 엔지니어링을 더 쉽고 가시성있게 만드는 기능을 제공합니다.
-    - 제가 즐겨쓰는 기본적인 루프 에이전트들을 내장하고 있습니다.
+## 현재 구현된 기능
+
+- **`my memory import --from <path> --store <db>`**
+  - Codex / Claude Code 세션 JSONL 파일(또는 디렉터리)을 파싱해 SQLite에 정규화 저장합니다.
+  - 지원하지 않는 파일은 건너뜁니다.
+- **`my memory ingest [--agent name=cmd[,arg...]] [--store <db>]`**
+  - 저장된 세션마다 설정된 에이전트(기본: claude, codex, pi)를 병렬 실행해 메모리 item을 생성·링크합니다.
+  - 옵션: `--limit`, `--source-id`, `--concurrency`(동시 실행 상한), `--skip-existing`(이미 수집한 (source, agent) 건너뛰기, 재개용).
+  - 동일 세션을 재수집해도 에이전트별로 이전 item을 원자적으로 교체해 중복이 쌓이지 않습니다.
+
+기본 저장 위치: `~/.local/share/my/memory/my.db`
+
+## 로드맵 (미구현)
+
+- **Graph 메모리**: 현재는 source→item 링크만 저장합니다. item 간 그래프 링크는 스키마 설계가 필요한 후속 작업입니다.
+- **MCP 서버**(`internal/mcp`): LLM 에이전트가 메모리를 조회·기록하는 인터페이스. 현재 placeholder.
+- **Claude Code hooks**를 통한 세션 자동 ingest.
+- **Agent Loop**: 루프 엔지니어링 가시성 도구 및 내장 루프 에이전트.
