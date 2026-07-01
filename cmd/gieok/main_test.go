@@ -99,7 +99,7 @@ func TestHelpReturnsCleanly(t *testing.T) {
 		{
 			name: "top level",
 			args: []string{"-h"},
-			want: "usage: gieok <memory|mcp>",
+			want: "usage: gieok <memory|mcp|web>",
 		},
 		{
 			name: "memory",
@@ -125,6 +125,11 @@ func TestHelpReturnsCleanly(t *testing.T) {
 			name: "mcp",
 			args: []string{"mcp", "-h"},
 			want: "usage: gieok mcp [serve]",
+		},
+		{
+			name: "web",
+			args: []string{"web", "-h"},
+			want: "usage: gieok web [--store",
 		},
 	}
 
