@@ -3,8 +3,6 @@ package memories
 import (
 	"time"
 
-	"github.com/uptrace/bun"
-
 	sourcespkg "github.com/junghwan16/gieok/internal/source"
 )
 
@@ -13,24 +11,20 @@ import (
 // column tags here in sync with those migrations.
 
 type memoryRow struct {
-	bun.BaseModel `bun:"table:memories,alias:memory"`
-
-	ID           string    `bun:"id,pk"`
-	Agent        string    `bun:"agent,notnull"`
-	Kind         string    `bun:"kind,notnull"`
-	Text         string    `bun:"text,notnull"`
-	CreatedAt    time.Time `bun:"created_at,notnull"`
-	MetadataJSON string    `bun:"metadata_json,notnull"`
+	ID           string
+	Agent        string
+	Kind         string
+	Text         string
+	CreatedAt    time.Time
+	MetadataJSON string
 }
 
 type linkRow struct {
-	bun.BaseModel `bun:"table:memory_links,alias:link"`
-
-	SourceID     string    `bun:"source_id,pk"`
-	MemoryID     string    `bun:"memory_id,pk"`
-	Kind         string    `bun:"kind,pk"`
-	CreatedAt    time.Time `bun:"created_at,notnull"`
-	MetadataJSON string    `bun:"metadata_json,notnull"`
+	SourceID     string
+	MemoryID     string
+	Kind         string
+	CreatedAt    time.Time
+	MetadataJSON string
 }
 
 func newMemoryRow(memory Memory) *memoryRow {
@@ -79,11 +73,11 @@ func (r linkRow) toLink() Link {
 // recall results: the memory ID it belongs to plus that source's identity and
 // scope. It is scanned from a memory_links-to-sources join, not a single table.
 type sourceRefRow struct {
-	MemoryID   string `bun:"memory_id"`
-	SourceID   string `bun:"source_id"`
-	SourceURI  string `bun:"source_uri"`
-	ScopeKind  string `bun:"scope_kind"`
-	ScopeValue string `bun:"scope_value"`
+	MemoryID   string
+	SourceID   string
+	SourceURI  string
+	ScopeKind  string
+	ScopeValue string
 }
 
 func (r sourceRefRow) toSourceRef() SourceRef {

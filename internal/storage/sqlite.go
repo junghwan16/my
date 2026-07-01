@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 
 	_ "github.com/glebarez/go-sqlite" // Register the pure-Go SQLite database/sql driver.
-	"github.com/uptrace/bun"
-	"github.com/uptrace/bun/dialect/sqlitedialect"
 )
 
 // sqlitePragmas are applied to every new connection. foreign_keys enforces the
@@ -21,7 +19,7 @@ const sqlitePragmas = "_pragma=busy_timeout(15000)&_pragma=foreign_keys(1)&_prag
 //
 // Schema ownership lives in internal/migrate; this package only owns connection
 // and driver concerns.
-func OpenSQLite(path string) (*bun.DB, error) {
+func OpenSQLite(path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create sqlite parent directory: %w", err)
 	}
@@ -33,5 +31,5 @@ func OpenSQLite(path string) (*bun.DB, error) {
 	// modernc's SQLite serializes writes per file; a single connection avoids
 	// lock contention for this single-process CLI store.
 	db.SetMaxOpenConns(1)
-	return bun.NewDB(db, sqlitedialect.New()), nil
+	return db, nil
 }

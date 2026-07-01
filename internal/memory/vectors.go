@@ -3,8 +3,6 @@ package memories
 import (
 	"encoding/binary"
 	"math"
-
-	"github.com/uptrace/bun"
 )
 
 // The memory_vectors table stores one dense embedding per memory as a
@@ -13,12 +11,10 @@ import (
 // dimension change and re-embed, so incomparable vectors are never mixed.
 
 type vectorRow struct {
-	bun.BaseModel `bun:"table:memory_vectors,alias:vec"`
-
-	MemoryID string `bun:"memory_id,pk"`
-	Model    string `bun:"model,notnull"`
-	Dim      int    `bun:"dim,notnull"`
-	Vector   []byte `bun:"vector,notnull"`
+	MemoryID string
+	Model    string
+	Dim      int
+	Vector   []byte
 }
 
 func newVectorRow(memoryID, model string, vector []float32) *vectorRow {

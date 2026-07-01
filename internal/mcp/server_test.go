@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -13,8 +14,6 @@ import (
 	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 	"github.com/junghwan16/gieok/internal/tokenize"
-
-	"github.com/uptrace/bun"
 )
 
 func TestRecallReturnsRankedMemoryWithSource(t *testing.T) {
@@ -148,7 +147,7 @@ func openStoresWith(ctx context.Context, t *testing.T, path string, tok memories
 	return sourcespkg.NewStore(db), memoriespkg.NewStore(db, tok), closeDB(t, db)
 }
 
-func closeDB(t *testing.T, db *bun.DB) func() {
+func closeDB(t *testing.T, db *sql.DB) func() {
 	return func() {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)

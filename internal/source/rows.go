@@ -3,8 +3,6 @@ package sources
 import (
 	"time"
 
-	"github.com/uptrace/bun"
-
 	"github.com/junghwan16/gieok/internal/jsonutil"
 )
 
@@ -13,33 +11,29 @@ import (
 // column tags here in sync with those migrations.
 
 type sourceRow struct {
-	bun.BaseModel `bun:"table:sources"`
-
-	ID            string    `bun:"id,pk"`
-	Kind          string    `bun:"kind,notnull"`
-	URI           string    `bun:"uri,notnull"`
-	ContentSHA256 string    `bun:"content_sha256,notnull"`
-	ScopeKind     string    `bun:"scope_kind,notnull"`
-	ScopeValue    string    `bun:"scope_value,notnull"`
-	StartedAt     time.Time `bun:"started_at,nullzero"`
-	EndedAt       time.Time `bun:"ended_at,nullzero"`
-	ImportedAt    time.Time `bun:"imported_at,notnull"`
-	MetadataJSON  string    `bun:"metadata_json,notnull"`
+	ID            string
+	Kind          string
+	URI           string
+	ContentSHA256 string
+	ScopeKind     string
+	ScopeValue    string
+	StartedAt     time.Time
+	EndedAt       time.Time
+	ImportedAt    time.Time
+	MetadataJSON  string
 }
 
 type sourceEventRow struct {
-	bun.BaseModel `bun:"table:source_events"`
-
-	SourceID    string    `bun:"source_id,pk"`
-	Index       int       `bun:"event_index,pk"`
-	Line        int       `bun:"line,notnull"`
-	At          time.Time `bun:"at,nullzero"`
-	Type        string    `bun:"type,notnull"`
-	TurnID      string    `bun:"turn_id,notnull"`
-	Role        string    `bun:"role,notnull"`
-	Text        string    `bun:"text,notnull"`
-	PayloadJSON string    `bun:"payload_json,notnull"`
-	RawJSON     string    `bun:"raw_json,notnull"`
+	SourceID    string
+	Index       int
+	Line        int
+	At          time.Time
+	Type        string
+	TurnID      string
+	Role        string
+	Text        string
+	PayloadJSON string
+	RawJSON     string
 }
 
 func newSourceRow(source Source) *sourceRow {

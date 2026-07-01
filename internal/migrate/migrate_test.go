@@ -2,11 +2,10 @@ package migrate
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/uptrace/bun"
 
 	"github.com/junghwan16/gieok/internal/storage"
 )
@@ -80,7 +79,7 @@ func TestApplyBacksUpAlreadyVersionedDatabase(t *testing.T) {
 	}
 }
 
-func openDB(t *testing.T, path string) (*bun.DB, func()) {
+func openDB(t *testing.T, path string) (*sql.DB, func()) {
 	t.Helper()
 	db, err := storage.OpenSQLite(path)
 	if err != nil {
@@ -93,7 +92,7 @@ func openDB(t *testing.T, path string) (*bun.DB, func()) {
 	}
 }
 
-func dbVersion(ctx context.Context, t *testing.T, db *bun.DB) int64 {
+func dbVersion(ctx context.Context, t *testing.T, db *sql.DB) int64 {
 	t.Helper()
 	gormDB, err := openGORM(db)
 	if err != nil {
@@ -106,7 +105,7 @@ func dbVersion(ctx context.Context, t *testing.T, db *bun.DB) int64 {
 	return version
 }
 
-func hasTable(ctx context.Context, t *testing.T, db *bun.DB, name string) bool {
+func hasTable(ctx context.Context, t *testing.T, db *sql.DB, name string) bool {
 	t.Helper()
 	var count int
 	if err := db.QueryRowContext(ctx,
@@ -117,7 +116,7 @@ func hasTable(ctx context.Context, t *testing.T, db *bun.DB, name string) bool {
 	return count > 0
 }
 
-func hasColumn(ctx context.Context, t *testing.T, db *bun.DB, table string, column string) bool {
+func hasColumn(ctx context.Context, t *testing.T, db *sql.DB, table string, column string) bool {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
@@ -149,7 +148,7 @@ func hasColumn(ctx context.Context, t *testing.T, db *bun.DB, table string, colu
 	return false
 }
 
-func createVersionedLegacySchema(ctx context.Context, t *testing.T, db *bun.DB, version int64) {
+func createVersionedLegacySchema(ctx context.Context, t *testing.T, db *sql.DB, version int64) {
 	t.Helper()
 	if _, err := db.ExecContext(ctx, `CREATE TABLE sources (
 		id TEXT PRIMARY KEY,

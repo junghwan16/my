@@ -52,5 +52,5 @@ gieok은 사용자당 SQLite 파일 1개
   SQL 파일에 중복되어 이름 변경·컬럼 진화 때 어긋나기 쉽다.
 - **직접 SQL runner (거절)** — 단순해 보이지만 버전 기록, 기존 DB 흡수, 백업 타이밍을
   직접 계속 관리해야 한다.
-- **`bun/migrate` (거절)** — 현재 query layer는 bun을 쓰지만, 이번 결정의 목표는
-  schema source를 Go 모델로 모으는 것이므로 GORM migrator가 더 직접적이다.
+- **별도 ORM migrator (거절)** — schema source를 Go 모델로 모으는 결정이므로 이미
+  쓰는 GORM migrator가 더 직접적이고, store query layer를 특정 ORM에 묶지 않는다.

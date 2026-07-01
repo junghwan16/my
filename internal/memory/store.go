@@ -7,8 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/uptrace/bun"
+	"time"
 
 	"github.com/junghwan16/gieok/internal/jsonutil"
 	sourcespkg "github.com/junghwan16/gieok/internal/source"
@@ -40,7 +39,7 @@ const defaultMinSimilarity = 0.40
 // Store saves memories and their links back to sources, and maintains the
 // full-text index used for recall.
 type Store struct {
-	db            *bun.DB
+	db            *sql.DB
 	tokenizer     Tokenizer
 	embedder      Embedder
 	minSimilarity float64
@@ -56,7 +55,7 @@ var (
 // paths so a term indexed one way is not missed by a query split differently.
 // The store starts with no embedder, so semantic recall is disabled until one
 // is attached with WithEmbedder.
-func NewStore(db *bun.DB, tokenizer Tokenizer) *Store {
+func NewStore(db *sql.DB, tokenizer Tokenizer) *Store {
 	return &Store{db: db, tokenizer: tokenizer, minSimilarity: defaultMinSimilarity}
 }
 
@@ -88,7 +87,7 @@ func (s *Store) ReplaceSourceMemories(ctx context.Context, sourceID sourcespkg.S
 	// store (e.g. the MCP server) hit "database is locked". Precompute vectors
 	// here, then the transaction only does fast local writes.
 	vectors := s.embedMemories(ctx, memories)
-	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	return s.runTx(ctx, func(tx *sql.Tx) error {
 		if err := s.deletePreviousAgentMemories(ctx, tx, sourceID, agent); err != nil {
 			return err
 		}
@@ -97,6 +96,27 @@ func (s *Store) ReplaceSourceMemories(ctx context.Context, sourceID sourcespkg.S
 		}
 		return s.upsertLinks(ctx, tx, links)
 	})
+}
+
+func (s *Store) runTx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin memory transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				err = fmt.Errorf("%w; rollback memory transaction: %w", err, rollbackErr)
+			}
+		}
+	}()
+	if err = fn(tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit memory transaction: %w", err)
+	}
+	return nil
 }
 
 // embedMemories embeds each memory's text with the store's embedder, outside any
@@ -118,50 +138,54 @@ func (s *Store) embedMemories(ctx context.Context, memories []Memory) map[Memory
 // deletePreviousAgentMemories removes every memory (and its links and search rows) that
 // the agent previously produced for the source, so a re-ingest never accumulates
 // old rows.
-func (s *Store) deletePreviousAgentMemories(ctx context.Context, tx bun.Tx, sourceID sourcespkg.SourceID, agent string) error {
-	var previousIDs []string
-	if err := tx.NewSelect().
-		Model((*memoryRow)(nil)).
-		Column("memory.id").
-		Join("JOIN memory_links AS link ON link.memory_id = memory.id").
-		Where("link.source_id = ?", sourceID).
-		Where("memory.agent = ?", agent).
-		Scan(ctx, &previousIDs); err != nil {
+func (s *Store) deletePreviousAgentMemories(ctx context.Context, tx *sql.Tx, sourceID sourcespkg.SourceID, agent string) error {
+	previousIDs, err := queryStrings(ctx, tx, `SELECT m.id
+		FROM memories AS m
+		JOIN memory_links AS link ON link.memory_id = m.id
+		WHERE link.source_id = ? AND m.agent = ?`, sourceID, agent)
+	if err != nil {
 		return fmt.Errorf("load previous memories: %w", err)
 	}
 	if len(previousIDs) == 0 {
 		return nil
 	}
-	if _, err := tx.NewDelete().
-		Model((*linkRow)(nil)).
-		Where("memory_id IN (?)", bun.List(previousIDs)).
-		Exec(ctx); err != nil {
+	if err := execIn(ctx, tx, "DELETE FROM memory_links WHERE memory_id IN", previousIDs); err != nil {
 		return fmt.Errorf("delete previous links: %w", err)
 	}
-	if _, err := tx.NewDelete().
-		Model((*memoryRow)(nil)).
-		Where("id IN (?)", bun.List(previousIDs)).
-		Exec(ctx); err != nil {
+	if err := execIn(ctx, tx, "DELETE FROM memories WHERE id IN", previousIDs); err != nil {
 		return fmt.Errorf("delete previous memories: %w", err)
 	}
 	return s.deleteFTS(ctx, tx, previousIDs)
 }
 
-func (s *Store) upsertMemories(ctx context.Context, tx bun.Tx, memories []Memory, vectors map[MemoryID][]float32) error {
+func (s *Store) upsertMemories(ctx context.Context, tx *sql.Tx, memories []Memory, vectors map[MemoryID][]float32) error {
 	for i := range memories {
 		mem := memories[i]
 		if len(mem.MetadataJSON) == 0 {
 			mem.MetadataJSON = jsonutil.EmptyObject()
 		}
-		if _, err := tx.NewInsert().
-			Model(newMemoryRow(mem)).
-			On("CONFLICT (id) DO UPDATE").
-			Set("agent = EXCLUDED.agent").
-			Set("kind = EXCLUDED.kind").
-			Set("text = EXCLUDED.text").
-			Set("created_at = EXCLUDED.created_at").
-			Set("metadata_json = EXCLUDED.metadata_json").
-			Exec(ctx); err != nil {
+		row := newMemoryRow(mem)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO memories (
+			id,
+			agent,
+			kind,
+			text,
+			created_at,
+			metadata_json
+		) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			agent = EXCLUDED.agent,
+			kind = EXCLUDED.kind,
+			text = EXCLUDED.text,
+			created_at = EXCLUDED.created_at,
+			metadata_json = EXCLUDED.metadata_json`,
+			row.ID,
+			row.Agent,
+			row.Kind,
+			row.Text,
+			row.CreatedAt,
+			row.MetadataJSON,
+		); err != nil {
 			return fmt.Errorf("upsert memory: %w", err)
 		}
 		if err := s.indexFTS(ctx, tx, mem); err != nil {
@@ -174,7 +198,7 @@ func (s *Store) upsertMemories(ctx context.Context, tx bun.Tx, memories []Memory
 	return nil
 }
 
-func (s *Store) upsertLinks(ctx context.Context, tx bun.Tx, links []Link) error {
+func (s *Store) upsertLinks(ctx context.Context, tx *sql.Tx, links []Link) error {
 	for i := range links {
 		link := links[i]
 		if link.MemoryID == "" {
@@ -183,12 +207,23 @@ func (s *Store) upsertLinks(ctx context.Context, tx bun.Tx, links []Link) error 
 		if len(link.MetadataJSON) == 0 {
 			link.MetadataJSON = jsonutil.EmptyObject()
 		}
-		if _, err := tx.NewInsert().
-			Model(newLinkRow(link)).
-			On("CONFLICT (source_id, memory_id, kind) DO UPDATE").
-			Set("created_at = EXCLUDED.created_at").
-			Set("metadata_json = EXCLUDED.metadata_json").
-			Exec(ctx); err != nil {
+		row := newLinkRow(link)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO memory_links (
+			source_id,
+			memory_id,
+			kind,
+			created_at,
+			metadata_json
+		) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (source_id, memory_id, kind) DO UPDATE SET
+			created_at = EXCLUDED.created_at,
+			metadata_json = EXCLUDED.metadata_json`,
+			row.SourceID,
+			row.MemoryID,
+			row.Kind,
+			row.CreatedAt,
+			row.MetadataJSON,
+		); err != nil {
 			return fmt.Errorf("upsert memory link: %w", err)
 		}
 	}
@@ -228,11 +263,9 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 // by id fetches the memory wherever it lives, attaching every Source it derives
 // from.
 func (s *Store) RecallResultByID(ctx context.Context, id MemoryID) (RecallResult, bool, error) {
-	var row memoryRow
-	err := s.db.NewSelect().
-		Model(&row).
-		Where("memory.id = ?", string(id)).
-		Scan(ctx)
+	row, err := queryMemoryRow(ctx, s.db, memoryColumnsSQL()+`
+		FROM memories AS m
+		WHERE m.id = ?`, string(id))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return RecallResult{}, false, nil
@@ -252,13 +285,11 @@ func (s *Store) RecallResultByID(ctx context.Context, id MemoryID) (RecallResult
 
 // SourceHasAgentMemories reports whether a source already has memories from an agent.
 func (s *Store) SourceHasAgentMemories(ctx context.Context, sourceID sourcespkg.SourceID, agent string) (bool, error) {
-	count, err := s.db.NewSelect().
-		Model((*memoryRow)(nil)).
-		Join("JOIN memory_links AS link ON link.memory_id = memory.id").
-		Where("link.source_id = ?", sourceID).
-		Where("memory.agent = ?", agent).
-		Count(ctx)
-	if err != nil {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*)
+		FROM memories AS m
+		JOIN memory_links AS link ON link.memory_id = m.id
+		WHERE link.source_id = ? AND m.agent = ?`, sourceID, agent).Scan(&count); err != nil {
 		return false, fmt.Errorf("count source agent memories: %w", err)
 	}
 	return count > 0, nil
@@ -266,13 +297,12 @@ func (s *Store) SourceHasAgentMemories(ctx context.Context, sourceID sourcespkg.
 
 // SourceMemories lists memories linked to a source.
 func (s *Store) SourceMemories(ctx context.Context, id sourcespkg.SourceID) ([]Memory, error) {
-	var rows []memoryRow
-	if err := s.db.NewSelect().
-		Model(&rows).
-		Join("JOIN memory_links AS link ON link.memory_id = memory.id").
-		Where("link.source_id = ?", id).
-		Order("memory.created_at", "memory.id").
-		Scan(ctx); err != nil {
+	rows, err := queryMemoryRows(ctx, s.db, memoryColumnsSQL()+`
+		FROM memories AS m
+		JOIN memory_links AS link ON link.memory_id = m.id
+		WHERE link.source_id = ?
+		ORDER BY m.created_at, m.id`, id)
+	if err != nil {
 		return nil, fmt.Errorf("load source memories: %w", err)
 	}
 
@@ -285,12 +315,11 @@ func (s *Store) SourceMemories(ctx context.Context, id sourcespkg.SourceID) ([]M
 
 // SourceLinks lists memory links for a source.
 func (s *Store) SourceLinks(ctx context.Context, id sourcespkg.SourceID) ([]Link, error) {
-	var rows []linkRow
-	if err := s.db.NewSelect().
-		Model(&rows).
-		Where("source_id = ?", id).
-		Order("created_at", "memory_id", "kind").
-		Scan(ctx); err != nil {
+	rows, err := queryLinkRows(ctx, s.db, linkColumnsSQL()+`
+		FROM memory_links AS link
+		WHERE link.source_id = ?
+		ORDER BY link.created_at, link.memory_id, link.kind`, id)
+	if err != nil {
 		return nil, fmt.Errorf("load source links: %w", err)
 	}
 
@@ -314,7 +343,7 @@ func (s *Store) SearchMemories(ctx context.Context, query, scope string, limit i
 		limit = defaultSearchLimit
 	}
 
-	sql := `SELECT m.id AS id, m.agent AS agent, m.kind AS kind, m.text AS text, m.created_at AS created_at, m.metadata_json AS metadata_json
+	sql := memoryColumnsSQL() + `
 		FROM (SELECT memory_id, rank FROM memories_fts WHERE memories_fts MATCH ?) AS f
 		JOIN memories AS m ON m.id = f.memory_id`
 	args := []any{match}
@@ -330,8 +359,8 @@ func (s *Store) SearchMemories(ctx context.Context, query, scope string, limit i
 		LIMIT ?`
 	args = append(args, limit)
 
-	var rows []memoryRow
-	if err := s.db.NewRaw(sql, args...).Scan(ctx, &rows); err != nil {
+	rows, err := queryMemoryRows(ctx, s.db, sql, args...)
+	if err != nil {
 		return nil, fmt.Errorf("search memories: %w", err)
 	}
 
@@ -345,9 +374,9 @@ func (s *Store) SearchMemories(ctx context.Context, query, scope string, limit i
 // candidateVector is a scoped memory row paired with its stored embedding,
 // loaded together so semantic ranking needs a single query per search.
 type candidateVector struct {
-	memoryRow `bun:",extend"`
+	memoryRow
 
-	VectorBlob []byte `bun:"vector_blob"`
+	VectorBlob []byte
 }
 
 // SearchSemantic ranks memories by cosine similarity between the query
@@ -387,20 +416,22 @@ func (s *Store) SearchSemantic(ctx context.Context, query, scope string, limit i
 // embedder's current model, each with its raw embedding blob. Scope filtering
 // mirrors SearchMemories (memory_links -> sources.scope_value).
 func (s *Store) loadCandidateVectors(ctx context.Context, scope string) ([]candidateVector, error) {
-	query := s.db.NewSelect().
-		Model((*candidateVector)(nil)).
-		ColumnExpr("memory.*").
-		ColumnExpr("vec.vector AS vector_blob").
-		Join("JOIN memory_vectors AS vec ON vec.memory_id = memory.id").
-		Where("vec.model = ?", s.embedder.Model())
+	query := memoryColumnsSQL() + `,
+		vec.vector
+		FROM memories AS m
+		JOIN memory_vectors AS vec ON vec.memory_id = m.id
+		WHERE vec.model = ?`
+	args := []any{s.embedder.Model()}
 	if scope != "" {
-		query = query.Where(
-			"EXISTS (SELECT 1 FROM memory_links AS l JOIN sources AS sr ON sr.id = l.source_id"+
-				" WHERE l.memory_id = memory.id AND sr.scope_value = ?)", scope)
+		query += `
+		AND EXISTS (
+			SELECT 1 FROM memory_links AS l JOIN sources AS sr ON sr.id = l.source_id
+			WHERE l.memory_id = m.id AND sr.scope_value = ?)`
+		args = append(args, scope)
 	}
 
-	var candidates []candidateVector
-	if err := query.Scan(ctx, &candidates); err != nil {
+	candidates, err := queryCandidateVectors(ctx, s.db, query, args...)
+	if err != nil {
 		return nil, fmt.Errorf("load candidate vectors: %w", err)
 	}
 	return candidates, nil
@@ -467,21 +498,25 @@ func (s *Store) RecentRecallResults(ctx context.Context, scope string, limit int
 		limit = defaultSearchLimit
 	}
 
-	query := s.db.NewSelect().
-		Model((*memoryRow)(nil))
+	query := memoryColumnsSQL() + `
+		FROM memories AS m`
+	args := []any{}
 	if scope != "" {
 		// A memory can link to several in-scope sources; EXISTS keeps one row
 		// per memory (SQLite has no DISTINCT ON) while still filtering by scope.
-		query = query.Where(
-			"EXISTS (SELECT 1 FROM memory_links AS l JOIN sources AS sr ON sr.id = l.source_id"+
-				" WHERE l.memory_id = memory.id AND sr.scope_value = ?)", scope)
+		query += `
+		WHERE EXISTS (
+			SELECT 1 FROM memory_links AS l JOIN sources AS sr ON sr.id = l.source_id
+			WHERE l.memory_id = m.id AND sr.scope_value = ?)`
+		args = append(args, scope)
 	}
+	query += `
+		ORDER BY m.created_at DESC, m.id
+		LIMIT ?`
+	args = append(args, limit)
 
-	var rows []memoryRow
-	if err := query.
-		Order("memory.created_at DESC", "memory.id").
-		Limit(limit).
-		Scan(ctx, &rows); err != nil {
+	rows, err := queryMemoryRows(ctx, s.db, query, args...)
+	if err != nil {
 		return nil, fmt.Errorf("load recent memories: %w", err)
 	}
 
@@ -506,23 +541,26 @@ func (s *Store) attachSources(ctx context.Context, memories []Memory, scope stri
 		ids = append(ids, string(mem.ID))
 	}
 
-	query := s.db.NewSelect().
-		Model((*linkRow)(nil)).
-		Column("link.memory_id").
-		ColumnExpr("sr.id AS source_id").
-		ColumnExpr("sr.uri AS source_uri").
-		ColumnExpr("sr.scope_kind AS scope_kind").
-		ColumnExpr("sr.scope_value AS scope_value").
-		Join("JOIN sources AS sr ON sr.id = link.source_id").
-		Where("link.memory_id IN (?)", bun.List(ids))
+	query := `SELECT
+		link.memory_id,
+		sr.id AS source_id,
+		sr.uri AS source_uri,
+		sr.scope_kind,
+		sr.scope_value
+	FROM memory_links AS link
+	JOIN sources AS sr ON sr.id = link.source_id
+	WHERE link.memory_id IN (` + placeholders(len(ids)) + `)`
+	args := stringsToAny(ids)
 	if scope != "" {
-		query = query.Where("sr.scope_value = ?", scope)
+		query += `
+		AND sr.scope_value = ?`
+		args = append(args, scope)
 	}
+	query += `
+	ORDER BY link.memory_id, sr.id`
 
-	var refs []sourceRefRow
-	if err := query.
-		Order("link.memory_id", "sr.id").
-		Scan(ctx, &refs); err != nil {
+	refs, err := querySourceRefRows(ctx, s.db, query, args...)
+	if err != nil {
 		return nil, fmt.Errorf("load recall result sources: %w", err)
 	}
 	return assembleRecallResults(memories, refs), nil
@@ -531,12 +569,13 @@ func (s *Store) attachSources(ctx context.Context, memories []Memory, scope stri
 // ReindexMemories rebuilds the full-text index from every stored memory. It is
 // safe to repeat and backfills memories saved before the index existed.
 func (s *Store) ReindexMemories(ctx context.Context) error {
-	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	return s.runTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM memories_fts"); err != nil {
 			return fmt.Errorf("clear fts index: %w", err)
 		}
-		var rows []memoryRow
-		if err := tx.NewSelect().Model(&rows).Scan(ctx); err != nil {
+		rows, err := queryMemoryRows(ctx, tx, memoryColumnsSQL()+`
+			FROM memories AS m`)
+		if err != nil {
 			return fmt.Errorf("load memories for reindex: %w", err)
 		}
 		for _, row := range rows {
@@ -570,7 +609,7 @@ func (s *Store) EnsureFTSIndexed(ctx context.Context) error {
 }
 
 // indexFTS replaces the search row for one memory inside an open transaction.
-func (s *Store) indexFTS(ctx context.Context, tx bun.Tx, mem Memory) error {
+func (s *Store) indexFTS(ctx context.Context, tx *sql.Tx, mem Memory) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM memories_fts WHERE memory_id = ?", string(mem.ID)); err != nil {
 		return fmt.Errorf("clear fts row: %w", err)
 	}
@@ -587,22 +626,28 @@ func (s *Store) indexFTS(ctx context.Context, tx bun.Tx, mem Memory) error {
 // vector is precomputed outside the transaction (see embedMemories), so this
 // does only fast local writes and never holds the lock during an embed. A nil
 // vec (no embedder, or a skipped embed) just clears any old row.
-func (s *Store) writeVector(ctx context.Context, tx bun.Tx, memID MemoryID, vec []float32) error {
+func (s *Store) writeVector(ctx context.Context, tx *sql.Tx, memID MemoryID, vec []float32) error {
 	if s.embedder == nil {
 		return nil
 	}
-	if _, err := tx.NewDelete().
-		Model((*vectorRow)(nil)).
-		Where("memory_id = ?", string(memID)).
-		Exec(ctx); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM memory_vectors WHERE memory_id = ?", string(memID)); err != nil {
 		return fmt.Errorf("clear memory vector: %w", err)
 	}
 	if len(vec) == 0 {
 		return nil
 	}
-	if _, err := tx.NewInsert().
-		Model(newVectorRow(string(memID), s.embedder.Model(), vec)).
-		Exec(ctx); err != nil {
+	row := newVectorRow(string(memID), s.embedder.Model(), vec)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_vectors (
+		memory_id,
+		model,
+		dim,
+		vector
+	) VALUES (?, ?, ?, ?)`,
+		row.MemoryID,
+		row.Model,
+		row.Dim,
+		row.Vector,
+	); err != nil {
 		return fmt.Errorf("store memory vector: %w", err)
 	}
 	return nil
@@ -630,11 +675,10 @@ func (s *Store) EnsureVectorsIndexed(ctx context.Context) error {
 		return nil
 	}
 	model := s.embedder.Model()
-	var rows []memoryRow
-	if err := s.db.NewSelect().
-		Model(&rows).
-		Where("id NOT IN (SELECT memory_id FROM memory_vectors WHERE model = ?)", model).
-		Scan(ctx); err != nil {
+	rows, err := queryMemoryRows(ctx, s.db, memoryColumnsSQL()+`
+		FROM memories AS m
+		WHERE m.id NOT IN (SELECT memory_id FROM memory_vectors WHERE model = ?)`, model)
+	if err != nil {
 		return fmt.Errorf("load memories for vector backfill: %w", err)
 	}
 	for _, row := range rows {
@@ -653,27 +697,299 @@ func (s *Store) backfillVector(ctx context.Context, mem Memory, model string) er
 	if !ok {
 		return nil
 	}
-	if _, err := s.db.NewInsert().
-		Model(newVectorRow(string(mem.ID), model, vec)).
-		On("CONFLICT (memory_id) DO UPDATE").
-		Set("model = EXCLUDED.model").
-		Set("dim = EXCLUDED.dim").
-		Set("vector = EXCLUDED.vector").
-		Exec(ctx); err != nil {
+	row := newVectorRow(string(mem.ID), model, vec)
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO memory_vectors (
+		memory_id,
+		model,
+		dim,
+		vector
+	) VALUES (?, ?, ?, ?)
+	ON CONFLICT (memory_id) DO UPDATE SET
+		model = EXCLUDED.model,
+		dim = EXCLUDED.dim,
+		vector = EXCLUDED.vector`,
+		row.MemoryID,
+		row.Model,
+		row.Dim,
+		row.Vector,
+	); err != nil {
 		return fmt.Errorf("backfill memory vector: %w", err)
 	}
 	return nil
 }
 
 // deleteFTS removes search rows for memories being replaced, inside a transaction.
-func (s *Store) deleteFTS(ctx context.Context, tx bun.Tx, ids []string) error {
+func (s *Store) deleteFTS(ctx context.Context, tx *sql.Tx, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM memories_fts WHERE memory_id IN (?)", bun.List(ids)); err != nil {
+	if err := execIn(ctx, tx, "DELETE FROM memories_fts WHERE memory_id IN", ids); err != nil {
 		return fmt.Errorf("delete previous fts rows: %w", err)
 	}
 	return nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+type sqlQueryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type sqlExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func memoryColumnsSQL() string {
+	return `SELECT
+		m.id,
+		m.agent,
+		m.kind,
+		m.text,
+		m.created_at,
+		m.metadata_json`
+}
+
+func linkColumnsSQL() string {
+	return `SELECT
+		link.source_id,
+		link.memory_id,
+		link.kind,
+		link.created_at,
+		link.metadata_json`
+}
+
+func queryMemoryRow(ctx context.Context, db sqlQueryer, query string, args ...any) (memoryRow, error) {
+	return scanMemoryRow(db.QueryRowContext(ctx, query, args...))
+}
+
+func queryMemoryRows(ctx context.Context, db sqlQueryer, query string, args ...any) ([]memoryRow, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	memories := []memoryRow{}
+	for rows.Next() {
+		row, err := scanMemoryRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		memories = append(memories, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return memories, nil
+}
+
+func scanMemoryRow(scanner rowScanner) (memoryRow, error) {
+	var row memoryRow
+	var createdAt any
+	if err := scanner.Scan(
+		&row.ID,
+		&row.Agent,
+		&row.Kind,
+		&row.Text,
+		&createdAt,
+		&row.MetadataJSON,
+	); err != nil {
+		return memoryRow{}, err
+	}
+	var err error
+	if row.CreatedAt, err = scanRequiredTime(createdAt); err != nil {
+		return memoryRow{}, fmt.Errorf("parse created_at: %w", err)
+	}
+	return row, nil
+}
+
+func queryLinkRows(ctx context.Context, db sqlQueryer, query string, args ...any) ([]linkRow, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	links := []linkRow{}
+	for rows.Next() {
+		row, err := scanLinkRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		links = append(links, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return links, nil
+}
+
+func scanLinkRow(scanner rowScanner) (linkRow, error) {
+	var row linkRow
+	var createdAt any
+	if err := scanner.Scan(
+		&row.SourceID,
+		&row.MemoryID,
+		&row.Kind,
+		&createdAt,
+		&row.MetadataJSON,
+	); err != nil {
+		return linkRow{}, err
+	}
+	var err error
+	if row.CreatedAt, err = scanRequiredTime(createdAt); err != nil {
+		return linkRow{}, fmt.Errorf("parse created_at: %w", err)
+	}
+	return row, nil
+}
+
+func queryCandidateVectors(ctx context.Context, db sqlQueryer, query string, args ...any) ([]candidateVector, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	candidates := []candidateVector{}
+	for rows.Next() {
+		row, err := scanCandidateVector(rows)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+func scanCandidateVector(scanner rowScanner) (candidateVector, error) {
+	var row candidateVector
+	var createdAt any
+	if err := scanner.Scan(
+		&row.ID,
+		&row.Agent,
+		&row.Kind,
+		&row.Text,
+		&createdAt,
+		&row.MetadataJSON,
+		&row.VectorBlob,
+	); err != nil {
+		return candidateVector{}, err
+	}
+	var err error
+	if row.CreatedAt, err = scanRequiredTime(createdAt); err != nil {
+		return candidateVector{}, fmt.Errorf("parse created_at: %w", err)
+	}
+	return row, nil
+}
+
+func querySourceRefRows(ctx context.Context, db sqlQueryer, query string, args ...any) ([]sourceRefRow, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	refs := []sourceRefRow{}
+	for rows.Next() {
+		var row sourceRefRow
+		if err := rows.Scan(&row.MemoryID, &row.SourceID, &row.SourceURI, &row.ScopeKind, &row.ScopeValue); err != nil {
+			return nil, err
+		}
+		refs = append(refs, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
+func queryStrings(ctx context.Context, db sqlQueryer, query string, args ...any) ([]string, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	values := []string{}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func execIn(ctx context.Context, db sqlExecer, prefix string, values []string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	_, err := db.ExecContext(ctx, prefix+" ("+placeholders(len(values))+")", stringsToAny(values)...)
+	return err
+}
+
+func closeRows(rows *sql.Rows) {
+	if err := rows.Close(); err != nil {
+		return
+	}
+}
+
+func placeholders(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	return strings.TrimRight(strings.Repeat("?,", count), ",")
+}
+
+func stringsToAny(values []string) []any {
+	args := make([]any, 0, len(values))
+	for _, value := range values {
+		args = append(args, value)
+	}
+	return args
+}
+
+func scanRequiredTime(value any) (time.Time, error) {
+	switch v := value.(type) {
+	case time.Time:
+		return v, nil
+	case string:
+		return parseSQLiteTime(v)
+	case []byte:
+		return parseSQLiteTime(string(v))
+	default:
+		return time.Time{}, fmt.Errorf("unsupported time value %T", value)
+	}
+}
+
+func parseSQLiteTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05",
+	} {
+		t, err := time.Parse(layout, value)
+		if err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported time format %q", value)
 }
 
 // ftsMatch builds an FTS5 MATCH expression from tokens: each token is quoted

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/uptrace/bun"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
@@ -26,7 +25,7 @@ const (
 // Apply brings db up to the latest schema version. Before changing an existing
 // local memory store it snapshots the file, so user memory can be restored if a
 // migration fails.
-func Apply(ctx context.Context, db *bun.DB, dbPath string) error {
+func Apply(ctx context.Context, db *sql.DB, dbPath string) error {
 	gormDB, err := openGORM(db)
 	if err != nil {
 		return err
@@ -59,8 +58,8 @@ func Apply(ctx context.Context, db *bun.DB, dbPath string) error {
 	return nil
 }
 
-func openGORM(db *bun.DB) (*gorm.DB, error) {
-	gormDB, err := gorm.Open(sqlite.Dialector{Conn: db.DB}, &gorm.Config{
+func openGORM(db *sql.DB) (*gorm.DB, error) {
+	gormDB, err := gorm.Open(sqlite.Dialector{Conn: db}, &gorm.Config{
 		DisableForeignKeyConstraintWhenMigrating: false,
 		Logger:                                   logger.Default.LogMode(logger.Silent),
 	})
@@ -70,7 +69,7 @@ func openGORM(db *bun.DB) (*gorm.DB, error) {
 	return gormDB, nil
 }
 
-func currentVersion(ctx context.Context, gormDB *gorm.DB, db *bun.DB) (int64, error) {
+func currentVersion(ctx context.Context, gormDB *gorm.DB, db *sql.DB) (int64, error) {
 	if gormDB.WithContext(ctx).Migrator().HasTable(&schemaState{}) {
 		var state schemaState
 		err := gormDB.WithContext(ctx).First(&state, "name = ?", schemaName).Error
@@ -84,7 +83,7 @@ func currentVersion(ctx context.Context, gormDB *gorm.DB, db *bun.DB) (int64, er
 	return legacyGooseVersion(ctx, db)
 }
 
-func legacyGooseVersion(ctx context.Context, db *bun.DB) (int64, error) {
+func legacyGooseVersion(ctx context.Context, db *sql.DB) (int64, error) {
 	exists, err := tableExists(ctx, db, "goose_db_version")
 	if err != nil {
 		return 0, err
@@ -105,7 +104,7 @@ func legacyGooseVersion(ctx context.Context, db *bun.DB) (int64, error) {
 	return version.Int64, nil
 }
 
-func needsApply(ctx context.Context, gormDB *gorm.DB, db *bun.DB, current int64) (bool, error) {
+func needsApply(ctx context.Context, gormDB *gorm.DB, db *sql.DB, current int64) (bool, error) {
 	if current < schemaVersion {
 		return true, nil
 	}
@@ -151,7 +150,7 @@ func hasExistingStore(ctx context.Context, gormDB *gorm.DB) bool {
 	return false
 }
 
-func applySchema(ctx context.Context, gormDB *gorm.DB, db *bun.DB) error {
+func applySchema(ctx context.Context, gormDB *gorm.DB, db *sql.DB) error {
 	if err := renameImportedAt(ctx, db); err != nil {
 		return err
 	}
@@ -173,7 +172,7 @@ func applySchema(ctx context.Context, gormDB *gorm.DB, db *bun.DB) error {
 	return nil
 }
 
-func renameImportedAt(ctx context.Context, db *bun.DB) error {
+func renameImportedAt(ctx context.Context, db *sql.DB) error {
 	sources, err := tableExists(ctx, db, "sources")
 	if err != nil {
 		return err
@@ -198,7 +197,7 @@ func renameImportedAt(ctx context.Context, db *bun.DB) error {
 	return nil
 }
 
-func createMemoryFTS(ctx context.Context, db *bun.DB) error {
+func createMemoryFTS(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 	memory_id UNINDEXED,
 	tokens,
@@ -222,7 +221,7 @@ func recordVersion(ctx context.Context, gormDB *gorm.DB) error {
 	return nil
 }
 
-func backup(ctx context.Context, db *bun.DB, dbPath string, fromVersion int64) error {
+func backup(ctx context.Context, db *sql.DB, dbPath string, fromVersion int64) error {
 	backupPath := fmt.Sprintf("%s.bak-v%d", dbPath, fromVersion)
 	// VACUUM INTO writes a consistent snapshot even under WAL, unlike a plain
 	// file copy that could miss the -wal contents. It cannot run inside a transaction.
@@ -232,7 +231,7 @@ func backup(ctx context.Context, db *bun.DB, dbPath string, fromVersion int64) e
 	return nil
 }
 
-func tableExists(ctx context.Context, db *bun.DB, table string) (bool, error) {
+func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
 	var count int
 	if err := db.QueryRowContext(ctx,
 		"SELECT count(*) FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?", table,
@@ -242,7 +241,7 @@ func tableExists(ctx context.Context, db *bun.DB, table string) (bool, error) {
 	return count > 0, nil
 }
 
-func columnExists(ctx context.Context, db *bun.DB, table string, column string) (found bool, err error) {
+func columnExists(ctx context.Context, db *sql.DB, table string, column string) (found bool, err error) {
 	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
 		return false, fmt.Errorf("list columns for %s: %w", table, err)
