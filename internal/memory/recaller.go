@@ -14,6 +14,7 @@ type MemoryReader interface {
 	SearchMemories(ctx context.Context, query, scope string, limit int) ([]Memory, error)
 	SearchSemantic(ctx context.Context, query, scope string, limit int) ([]Memory, error)
 	SearchRecollections(ctx context.Context, query, scope string, limit int) ([]Recollection, error)
+	HybridRecollections(ctx context.Context, query, scope string, limit int) ([]Recollection, error)
 	RecentRecollections(ctx context.Context, scope string, limit int) ([]Recollection, error)
 }
 
@@ -55,14 +56,19 @@ func (r *Recaller) Links(ctx context.Context, id source.SourceID) ([]Link, error
 	return r.store.SourceLinks(ctx, id)
 }
 
-// Recollect is the recall application seam the CLI and a future MCP tool share.
-// It finds relevant Memory within a Scope for the current task and returns
-// Recollections carrying Source context. With task text it ranks by lexical
-// match; with empty task text it returns recent Memory in scope, so recall
-// doubles as a workspace memory overview. An empty scope spans every scope.
+// Recollect is the recall application seam the CLI and the MCP tool share. It
+// finds relevant Memory within a Scope for the current task and returns
+// Recollections carrying Source context. With task text it ranks by hybrid
+// recall — fusing the lexical (FTS5/BM25) and semantic (embedding cosine)
+// rankings with Reciprocal Rank Fusion — so the two engines' complementary hits
+// reinforce each other. When no embedder is attached the semantic list is empty
+// and the fusion degrades to pure lexical order, so recall keeps working
+// offline with no contract change. With empty task text it returns recent
+// Memory in scope, so recall doubles as a workspace memory overview. An empty
+// scope spans every scope.
 func (r *Recaller) Recollect(ctx context.Context, task, scope string, limit int) ([]Recollection, error) {
 	if strings.TrimSpace(task) == "" {
 		return r.store.RecentRecollections(ctx, scope, limit)
 	}
-	return r.store.SearchRecollections(ctx, task, scope, limit)
+	return r.store.HybridRecollections(ctx, task, scope, limit)
 }
