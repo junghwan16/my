@@ -20,12 +20,20 @@
   - stdio 위에서 도는 MCP 서버를 실행합니다. Claude Code 같은 MCP 클라이언트가 붙어 메모리를 Recall 할 수 있습니다.
   - `recall` 툴: `query`(필수), `scope`(선택), `limit`(선택)을 받아 CLI recall과 동일한 seam(`memory.Recaller.Recollect`, 한국어 형태소 + FTS5)을 통과시켜 랭킹된 Memory를 구조화 결과로 반환합니다.
   - 각 결과는 `memory_id`, `agent`, `kind`, `text`, `created`와, Memory가 파생된 여러 Source를 담는 `sources` 배열(각 항목 `id` / `uri` / `scope{kind,value}`)을 담습니다. CLI recall의 `--json` 모델과 동일한 shape입니다.
+- **`my hook [--store <db>]`**
+  - Claude Code hook 페이로드를 stdin(JSON)으로 받아 `transcript_path` 세션을 자동으로 import 합니다. 끝난 세션이 곧 recall 가능한 Source가 됩니다.
+  - fail-soft: 페이로드·세션에 문제가 있어도 세션을 깨뜨리지 않도록 stderr에 알리고 종료 코드 0으로 끝납니다. LLM 단계인 ingest는 hook에서 하지 않고 `my memory ingest` 배치에 맡겨 hook을 빠르게 유지합니다.
+  - `~/.claude/settings.json`의 Stop hook으로 연결합니다:
+    ```json
+    { "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "my hook" } ] } ] } }
+    ```
 
 기본 저장 위치: `~/.local/share/my/memory/my.db`
 
 ## 로드맵 (미구현)
 
 - **Graph 메모리**: 현재는 source→Memory 링크만 저장합니다. Memory 간 그래프 링크는 스키마 설계가 필요한 후속 작업입니다.
-- **MCP 기록(record) 툴**: 현재 MCP 서버는 Recall(`recall` 툴)만 노출합니다. 에이전트가 MCP를 통해 Memory를 직접 기록하는 인터페이스는 후속 작업입니다.
-- **Claude Code hooks**를 통한 세션 자동 ingest.
+- **의미(semantic)·하이브리드 recall**: 현재 recall은 어휘(형태소+FTS5)만 씁니다. 로컬 임베딩 + 하이브리드(RRF)는 후속 작업입니다.
 - **Agent Loop**: 루프 엔지니어링 가시성 도구 및 내장 루프 에이전트.
+
+세션을 대화 중 직접 기록하는 MCP `record` 툴은 도입하지 않습니다 — 세션 자체가 Source이고, hook/ingest로 인제스트되는 것이 곧 기록입니다(참조 시스템 seCall과 동일).
