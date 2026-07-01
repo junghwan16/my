@@ -1,0 +1,87 @@
+run:
+  id: 2026-07-02-legacy-scope-smoke
+  ran_at: "2026-07-02T00:00:56+0900"
+  git_head: "56b0b50"
+  store: "~/.local/share/gieok/memory/gieok.db"
+  canonical_scope: "/Users/jeff.cho/personal/gieok"
+  evaluated_scope: "/Users/jeff.cho/personal/my"
+  command_template: "go run ./cmd/gieok memory recall <task_prompt> --scope /Users/jeff.cho/personal/my --limit 5 --json"
+  related_issue: "https://github.com/junghwan16/gieok/issues/21"
+  notes:
+    - "This run intentionally uses the legacy Scope because the canonical Scope has no Source or linked Memory yet."
+    - "The run distinguishes recall usefulness from Scope continuity across the my -> gieok path rename."
+    - "Results keep only top memory ids and short excerpts; full recall JSON was not copied into this file."
+
+summary:
+  scenarios: 3
+  expected_memory_top5_hits: 1
+  dangerous_false_positives: 0
+  pass_threshold: "70% expected-memory top-5 hit rate"
+  status: "fail"
+  hit_rate: "33%"
+  reason: "Only the semantic-floor scenario returned the expected actionable Memory in the top five."
+
+results:
+  - scenario_id: useful-recall-001-session-capture
+    top5_count: 5
+    expected_memory_top5_hit: false
+    dangerous_false_positives: []
+    top_results:
+      - memory_id: "memory:21414939e0bf8d54960357ff8fce81b9b6179a11a14483d676f8c2ea42994196"
+        agent: "claude"
+        excerpt: "spec_improve_architecture workflow and CommandAgent seam example"
+      - memory_id: "memory:954b44b07e16fa37739ba7bb736d83f0a02a3e0f13a331ebfb6198910d011e22"
+        agent: "raw"
+        excerpt: "raw ingest prompt for architecture review session"
+      - memory_id: "memory:be2ebbf2255ebc2b47b77bcf46963e96bc0eff9309d2a6163858cbe4efb173f7"
+        agent: "raw"
+        excerpt: "raw ingest prompt with sparse event sample"
+      - memory_id: "memory:1d423f2b9778070b9f98e9bf1e15b10590be4711b8188788b00cff98cfb8d208"
+        agent: "raw"
+        excerpt: "raw ingest prompt with sparse event sample"
+      - memory_id: "memory:8a38f3dd300bf0ebaf146f074074b66c411f5d38223e5e07b66733957eb55462"
+        agent: "raw"
+        excerpt: "raw ingest prompt for spec-improve-architecture report"
+
+  - scenario_id: useful-recall-002-semantic-floor
+    top5_count: 5
+    expected_memory_top5_hit: true
+    dangerous_false_positives: []
+    hit_memory_id: "memory:67656f8aff8175846800629b8948884a42e0319d59929a70ce4f8d5dcaf49204"
+    top_results:
+      - memory_id: "memory:67656f8aff8175846800629b8948884a42e0319d59929a70ce4f8d5dcaf49204"
+        agent: "claude"
+        excerpt: "bge-m3 semantic threshold calibration; floor lowered from 0.5 to 0.40 to prioritize recall over precision"
+      - memory_id: "memory:ba0b2501e74e62d0e5f5183d5039fa634f8de0865d7ed6675fe2dc66f463e5b5"
+        agent: "claude"
+        excerpt: "Korean-aware lexical retrieval layer and embedding sidecar roadmap"
+      - memory_id: "memory:77c8cda515ee445079805677960a053a9dadf27b862f84a81c65f28878447d81"
+        agent: "raw"
+        excerpt: "raw ingest prompt for spec-improve-architecture skill session"
+      - memory_id: "memory:21414939e0bf8d54960357ff8fce81b9b6179a11a14483d676f8c2ea42994196"
+        agent: "claude"
+        excerpt: "spec_improve_architecture workflow and CommandAgent seam example"
+      - memory_id: "memory:a8494ff91011e3b52a60ef999e5c8c56b6eef509d9ffa4bee1ca0dced01dd947"
+        agent: "claude"
+        excerpt: "project_my_structure and related project patterns"
+
+  - scenario_id: useful-recall-003-gieok-rename
+    top5_count: 5
+    expected_memory_top5_hit: false
+    dangerous_false_positives: []
+    top_results:
+      - memory_id: "memory:67656f8aff8175846800629b8948884a42e0319d59929a70ce4f8d5dcaf49204"
+        agent: "claude"
+        excerpt: "ingest --limit queue stalling, semantic threshold calibration, git hygiene"
+      - memory_id: "memory:ba0b2501e74e62d0e5f5183d5039fa634f8de0865d7ed6675fe2dc66f463e5b5"
+        agent: "claude"
+        excerpt: "Recall engine architecture and package structure"
+      - memory_id: "memory:77c8cda515ee445079805677960a053a9dadf27b862f84a81c65f28878447d81"
+        agent: "raw"
+        excerpt: "raw ingest prompt for spec-improve-architecture skill session"
+      - memory_id: "memory:21414939e0bf8d54960357ff8fce81b9b6179a11a14483d676f8c2ea42994196"
+        agent: "claude"
+        excerpt: "spec_improve_architecture workflow and CommandAgent seam example"
+      - memory_id: "memory:a8494ff91011e3b52a60ef999e5c8c56b6eef509d9ffa4bee1ca0dced01dd947"
+        agent: "claude"
+        excerpt: "project_my_structure and related project patterns"

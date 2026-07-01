@@ -1,0 +1,44 @@
+run:
+  id: 2026-07-01-smoke
+  ran_at: "2026-07-01T23:58:49+0900"
+  git_head: "56b0b50"
+  store: "~/.local/share/gieok/memory/gieok.db"
+  command_template: "go run ./cmd/gieok memory recall <task_prompt> --scope /Users/jeff.cho/personal/gieok --limit 5 --json"
+  notes:
+    - "Initial smoke command failed before recall because schema_versions had no gieok row and Apply attempted an unnecessary GORM rewrite."
+    - "After the migration fix in this working tree, the store opened and recorded schema version 5."
+    - "The selected Scope has no imported Source or linked Memory in the current store, so all scenarios returned empty results."
+    - "Diagnostic counts: /Users/jeff.cho/personal/gieok has 0 Source and 0 linked Memory; /Users/jeff.cho/personal/my has 11 Source and 14 linked Memory."
+
+summary:
+  scenarios: 3
+  expected_memory_top5_hits: 0
+  dangerous_false_positives: 0
+  pass_threshold: "70% expected-memory top-5 hit rate"
+  status: "not_ready"
+  reason: "No Source or Memory exists for the evaluated Scope."
+
+results:
+  - scenario_id: useful-recall-001-session-capture
+    top5_count: 0
+    expected_memory_top5_hit: false
+    dangerous_false_positives: []
+    failure_class: "no_memory_in_scope"
+    output:
+      memories: []
+
+  - scenario_id: useful-recall-002-semantic-floor
+    top5_count: 0
+    expected_memory_top5_hit: false
+    dangerous_false_positives: []
+    failure_class: "no_memory_in_scope"
+    output:
+      memories: []
+
+  - scenario_id: useful-recall-003-gieok-rename
+    top5_count: 0
+    expected_memory_top5_hit: false
+    dangerous_false_positives: []
+    failure_class: "no_memory_in_scope"
+    output:
+      memories: []

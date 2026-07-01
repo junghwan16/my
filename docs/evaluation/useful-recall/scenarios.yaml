@@ -1,0 +1,43 @@
+# Replay Scenarios for the first Useful Recall trial.
+# Fill this with real past tasks from /Users/jeff.cho/personal/gieok.
+
+scenarios:
+  - id: useful-recall-001-session-capture
+    task_prompt: "세션 자동 캡처 방식을 다시 손보고 싶다. hook으로 바로 기록하는 게 나을까?"
+    scope: "/Users/jeff.cho/personal/gieok"
+    expected_memory:
+      kind: knowledge
+      text: "과거 per-turn Stop hook은 대화 기록의 커지는 부분 스냅샷을 Source로 중복 생성해서 제거했다. 현재 방향은 세션 파일을 Source로 import하고 예약 ingest로 Memory를 만드는 방식이다."
+      evidence_refs:
+        - "README.md#세션-자동-캡처"
+        - "git:6f7665c refactor(cli): remove the per-turn hook; capture sessions via scheduled batch"
+    expected_behavior_change: "다음 에이전트가 `gieok hook` 또는 대화 중 직접 record 툴을 되살리는 설계를 먼저 제안하지 않고, import와 scheduled ingest 경로를 기준으로 검토한다."
+    dangerous_false_positives:
+      - "MCP `record` 툴이나 per-turn hook을 현재 설계로 오해시키는 Memory"
+
+  - id: useful-recall-002-semantic-floor
+    task_prompt: "recall이 paraphrase 질의를 잘 못 찾는 것 같다. semantic similarity cutoff를 더 엄격하게 올려도 될까?"
+    scope: "/Users/jeff.cho/personal/gieok"
+    expected_memory:
+      kind: knowledge
+      text: "semantic similarity floor 0.50은 paraphrase를 죽여서 0.40으로 낮췄다. gieok recall은 false negative를 줄이는 recall-first 쪽을 우선한다."
+      evidence_refs:
+        - "internal/memory/store.go"
+        - "git:d234f7d fix(recall): lower semantic floor to 0.40 (recall-first); 0.5 killed paraphrases"
+    expected_behavior_change: "다음 에이전트가 cutoff를 올리기 전에 paraphrase 회귀를 먼저 재현하고, threshold 변경을 precision-only 튜닝으로 취급하지 않는다."
+    dangerous_false_positives:
+      - "off-topic 결과를 없애기 위해 threshold를 높이는 것이 항상 안전하다고 암시하는 Memory"
+
+  - id: useful-recall-003-gieok-rename
+    task_prompt: "README와 CLI help를 정리하면서 아직 my라는 이름이 남아 있는지 봐줘."
+    scope: "/Users/jeff.cho/personal/gieok"
+    expected_memory:
+      kind: knowledge
+      text: "프로젝트와 명령어는 `my`에서 `gieok`으로 rename됐다. 문서, Go module path, CLI usage, default agent shortcut 동작이 함께 맞아야 한다."
+      evidence_refs:
+        - "README.md"
+        - "go.mod"
+        - "git:6557b98 rename module my -> gieok; add ResolveAgentSpec for default-agent pinning"
+    expected_behavior_change: "다음 에이전트가 `my memory ...`를 새 문서나 테스트에 남기지 않고, rename 확인을 README/CLI help/go.mod/import path/test fixture까지 함께 본다."
+    dangerous_false_positives:
+      - "과거 `my memory recall` PRD 표현을 현재 CLI 이름으로 제시하는 Memory"
