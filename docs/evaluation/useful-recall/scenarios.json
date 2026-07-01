@@ -1,0 +1,26 @@
+{
+  "_note": "Machine-readable replay scenarios for `gieok memory eval`. Scope is the legacy /Users/jeff.cho/personal/my path where the gieok-dev Source and Memory currently live (canonical /personal/gieok has none yet; scope continuity is issue #21). expected_knowledge is embedded and compared to each top result by cosine; anchors are distinctive substrings that count as a lexical hit. Three scenarios is statistically underpowered — treat results as directional until the set grows to 10-15.",
+  "scenarios": [
+    {
+      "id": "useful-recall-001-session-capture",
+      "task": "세션 자동 캡처 방식을 다시 손보고 싶다. hook으로 바로 기록하는 게 나을까?",
+      "scope": "/Users/jeff.cho/personal/my",
+      "expected_knowledge": "과거 per-turn Stop hook은 대화 기록의 커지는 부분 스냅샷을 Source로 중복 생성해서 제거했다. 현재 방향은 세션 파일을 Source로 import하고 예약 ingest로 Memory를 만드는 방식이다.",
+      "anchors": ["per-turn", "scheduled", "import"]
+    },
+    {
+      "id": "useful-recall-002-semantic-floor",
+      "task": "recall이 paraphrase 질의를 잘 못 찾는 것 같다. semantic similarity cutoff를 더 엄격하게 올려도 될까?",
+      "scope": "/Users/jeff.cho/personal/my",
+      "expected_knowledge": "semantic similarity floor 0.50은 paraphrase를 죽여서 0.40으로 낮췄다. gieok recall은 false negative를 줄이는 recall-first 쪽을 우선한다.",
+      "anchors": ["0.40", "0.50", "paraphrase", "recall-first"]
+    },
+    {
+      "id": "useful-recall-003-gieok-rename",
+      "task": "README와 CLI help를 정리하면서 아직 my라는 이름이 남아 있는지 봐줘.",
+      "scope": "/Users/jeff.cho/personal/my",
+      "expected_knowledge": "프로젝트와 명령어는 my에서 gieok으로 rename됐다. 문서, Go module path, CLI usage, default agent shortcut 동작이 함께 맞아야 한다.",
+      "anchors": ["rename", "go.mod", "module path"]
+    }
+  ]
+}
