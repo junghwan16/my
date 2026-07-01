@@ -9,10 +9,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 
 	"github.com/glebarez/sqlite"
 )
@@ -35,11 +37,19 @@ func Apply(ctx context.Context, db *sql.DB, dbPath string) error {
 	if err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
-	needsApply, err := needsApply(ctx, gormDB, db, current)
+
+	shapeCurrent, err := schemaShapeCurrent(ctx, gormDB)
 	if err != nil {
 		return err
 	}
-	if !needsApply {
+	if shapeCurrent {
+		// The physical schema already matches the latest models; only the
+		// version ledger is behind (e.g. a legacy store, or a prior run that
+		// applied the schema but failed to record the version). Stamp the
+		// version without the costly backup + rewrite.
+		if current < schemaVersion {
+			return recordVersion(ctx, gormDB)
+		}
 		return nil
 	}
 
@@ -48,14 +58,10 @@ func Apply(ctx context.Context, db *sql.DB, dbPath string) error {
 			return err
 		}
 	}
-
 	if err := applySchema(ctx, gormDB, db); err != nil {
 		return err
 	}
-	if err := recordVersion(ctx, gormDB); err != nil {
-		return err
-	}
-	return nil
+	return recordVersion(ctx, gormDB)
 }
 
 func openGORM(db *sql.DB) (*gorm.DB, error) {
@@ -104,11 +110,13 @@ func legacyGooseVersion(ctx context.Context, db *sql.DB) (int64, error) {
 	return version.Int64, nil
 }
 
-func needsApply(ctx context.Context, gormDB *gorm.DB, db *sql.DB, current int64) (bool, error) {
-	if current < schemaVersion {
-		return true, nil
-	}
-	migrator := gormDB.WithContext(ctx).Migrator()
+// schemaShapeCurrent reports whether the physical database already has every
+// table and column the current models declare. The models are the single
+// source of truth, so the expected columns are derived from them rather than
+// listed by hand — the check cannot drift when a model changes.
+func schemaShapeCurrent(ctx context.Context, gormDB *gorm.DB) (bool, error) {
+	gormDB = gormDB.WithContext(ctx)
+	migrator := gormDB.Migrator()
 	for _, model := range []any{
 		&schemaState{},
 		&sourceModel{},
@@ -118,17 +126,22 @@ func needsApply(ctx context.Context, gormDB *gorm.DB, db *sql.DB, current int64)
 		&memoryVectorModel{},
 	} {
 		if !migrator.HasTable(model) {
-			return true, nil
+			return false, nil
+		}
+		sch, err := schema.Parse(model, &sync.Map{}, gormDB.NamingStrategy)
+		if err != nil {
+			return false, fmt.Errorf("parse model schema for shape check: %w", err)
+		}
+		for _, column := range sch.DBNames {
+			if !migrator.HasColumn(model, column) {
+				return false, nil
+			}
 		}
 	}
 	if !migrator.HasTable("memories_fts") {
-		return true, nil
+		return false, nil
 	}
-	hasImported, err := columnExists(ctx, db, "sources", "imported_at")
-	if err != nil {
-		return false, err
-	}
-	return !hasImported, nil
+	return true, nil
 }
 
 func hasExistingStore(ctx context.Context, gormDB *gorm.DB) bool {
