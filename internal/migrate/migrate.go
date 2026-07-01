@@ -19,7 +19,7 @@ import (
 
 const (
 	schemaName    = "gieok"
-	schemaVersion = int64(5)
+	schemaVersion = int64(6)
 )
 
 // Apply brings db up to the latest schema version. Before changing an existing
@@ -115,6 +115,7 @@ func needsApply(ctx context.Context, gormDB *gorm.DB, db *sql.DB, current int64)
 		&sourceEventModel{},
 		&memoryModel{},
 		&memoryLinkModel{},
+		&memoryRelationModel{},
 		&memoryVectorModel{},
 	} {
 		if !migrator.HasTable(model) {
@@ -138,6 +139,7 @@ func hasExistingStore(ctx context.Context, gormDB *gorm.DB) bool {
 		"source_events",
 		"memories",
 		"memory_links",
+		"memory_relations",
 		"memories_fts",
 		"memory_vectors",
 		"schema_versions",
@@ -161,6 +163,7 @@ func applySchema(ctx context.Context, gormDB *gorm.DB, db *sql.DB) error {
 		&sourceEventModel{},
 		&memoryModel{},
 		&memoryLinkModel{},
+		&memoryRelationModel{},
 		&memoryVectorModel{},
 	)
 	if err != nil {
@@ -344,6 +347,26 @@ type memoryLinkModel struct {
 
 func (memoryLinkModel) TableName() string {
 	return "memory_links"
+}
+
+// memoryRelationModel is a directed Memory->Memory relation (issue #16). Unlike a
+// memory_link (Source->Memory provenance), a relation connects a new Memory to an
+// existing one the agent chose to build on. Both endpoints cascade on delete, so
+// deleting either Memory leaves no dangling relation. The kind column is a fixed
+// "relates" today but is part of the primary key so future relation types can
+// coexist between the same pair without a schema change.
+type memoryRelationModel struct {
+	FromMemoryID string      `gorm:"column:from_memory_id;type:text;primaryKey"`
+	ToMemoryID   string      `gorm:"column:to_memory_id;type:text;primaryKey;index:memory_relations_to_idx"`
+	Kind         string      `gorm:"column:kind;type:text;primaryKey"`
+	CreatedAt    time.Time   `gorm:"column:created_at;type:text;not null"`
+	MetadataJSON string      `gorm:"column:metadata_json;type:text;not null"`
+	From         memoryModel `gorm:"foreignKey:FromMemoryID;references:ID;constraint:OnDelete:CASCADE"`
+	To           memoryModel `gorm:"foreignKey:ToMemoryID;references:ID;constraint:OnDelete:CASCADE"`
+}
+
+func (memoryRelationModel) TableName() string {
+	return "memory_relations"
 }
 
 type memoryVectorModel struct {

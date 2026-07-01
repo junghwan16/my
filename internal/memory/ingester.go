@@ -23,7 +23,7 @@ type SourceReader interface {
 // MemoryWriter persists the memories an ingest run produces. *Store satisfies it.
 type MemoryWriter interface {
 	SourceHasAgentMemories(context.Context, sourcespkg.SourceID, string) (bool, error)
-	ReplaceSourceMemories(context.Context, sourcespkg.SourceID, string, []Memory, []Link) error
+	ReplaceSourceMemories(context.Context, sourcespkg.SourceID, string, []Memory, []Link, []Relation) error
 }
 
 // MemoryStore reads and writes memories. *Store satisfies it. Ingest writes new
@@ -63,6 +63,12 @@ type AgentMemory struct {
 	Kind         MemoryKind      `json:"kind"`
 	Text         string          `json:"text"`
 	MetadataJSON json.RawMessage `json:"metadata_json"`
+	// RelatesTo names existing memories this new memory builds on. Each is the id
+	// of a memory shown to the agent as related context; ids that were not shown
+	// are silently dropped (see the allowlist in memoriesFromAgentRun), so an
+	// agent cannot invent a relation to an arbitrary memory. The plain-text output
+	// path carries no relations.
+	RelatesTo []MemoryID `json:"relates_to"`
 }
 
 // defaultConcurrency caps how many agents run at once when the caller does not
@@ -224,8 +230,8 @@ func (in *Ingester) ingestSource(
 			continue
 		}
 
-		memories, links := memoriesFromAgentRun(src.ID, run, now)
-		if err := in.memories.ReplaceSourceMemories(ctx, src.ID, run.agent, memories, links); err != nil {
+		memories, links, relations := memoriesFromAgentRun(src.ID, run, related, now)
+		if err := in.memories.ReplaceSourceMemories(ctx, src.ID, run.agent, memories, links, relations); err != nil {
 			return 0, agentErrors, err
 		}
 		count += len(memories)
@@ -303,10 +309,17 @@ func (in *Ingester) selectAgents(ctx context.Context, sourceID sourcespkg.Source
 	return active, nil
 }
 
-// memoriesFromAgentRun turns one agent's output into memories and their source links.
-func memoriesFromAgentRun(sourceID sourcespkg.SourceID, run agentRunResult, now time.Time) ([]Memory, []Link) {
+// memoriesFromAgentRun turns one agent's output into memories, their source
+// links, and the Memory->Memory relations the agent authored. A relation is kept
+// only when its target id is in allowed — the set of existing memories that were
+// actually shown to this agent as related context; any other id (including one
+// the agent invented) is silently dropped. Every relation runs new memory ->
+// existing memory with kind RelationKindRelates.
+func memoriesFromAgentRun(sourceID sourcespkg.SourceID, run agentRunResult, related []RecallResult, now time.Time) ([]Memory, []Link, []Relation) {
+	allowed := relatedMemoryIDs(related)
 	memories := make([]Memory, 0, len(run.output.Memories))
 	links := make([]Link, 0, len(run.output.Memories))
+	relations := make([]Relation, 0, len(run.output.Memories))
 	for _, agentMemory := range run.output.Memories {
 		mem := memoryFromAgentOutput(sourceID, run.agent, agentMemory, now)
 		memories = append(memories, mem)
@@ -317,8 +330,43 @@ func memoriesFromAgentRun(sourceID sourcespkg.SourceID, run agentRunResult, now 
 			CreatedAt:    now,
 			MetadataJSON: jsonutil.MustMarshal(map[string]string{"agent": run.agent}),
 		})
+		relations = append(relations, allowedRelations(mem.ID, agentMemory.RelatesTo, allowed, now)...)
 	}
-	return memories, links
+	return memories, links, relations
+}
+
+// relatedMemoryIDs is the allowlist of existing memory ids an agent may point a
+// relates_to at: exactly the memories shown to it as related context.
+func relatedMemoryIDs(related []RecallResult) map[MemoryID]bool {
+	allowed := make(map[MemoryID]bool, len(related))
+	for _, recallResult := range related {
+		allowed[recallResult.MemoryID] = true
+	}
+	return allowed
+}
+
+// allowedRelations turns one memory's relates_to ids into relations, keeping only
+// ids in the allowlist and never a self-relation, and de-duplicating repeats.
+func allowedRelations(from MemoryID, relatesTo []MemoryID, allowed map[MemoryID]bool, now time.Time) []Relation {
+	if len(relatesTo) == 0 {
+		return nil
+	}
+	seen := make(map[MemoryID]bool, len(relatesTo))
+	relations := make([]Relation, 0, len(relatesTo))
+	for _, to := range relatesTo {
+		if to == "" || to == from || !allowed[to] || seen[to] {
+			continue
+		}
+		seen[to] = true
+		relations = append(relations, Relation{
+			FromMemoryID: from,
+			ToMemoryID:   to,
+			Kind:         RelationKindRelates,
+			CreatedAt:    now,
+			MetadataJSON: jsonutil.EmptyObject(),
+		})
+	}
+	return relations
 }
 
 type agentRunResult struct {
