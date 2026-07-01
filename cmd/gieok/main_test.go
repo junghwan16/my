@@ -179,8 +179,8 @@ func TestMemoryIngestRunsConfiguredAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run returned error: %v\nstderr: %s", err, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "built 1 memories from 1 source") {
-		t.Fatalf("stdout = %q, want ingest count", stdout.String())
+	if !strings.Contains(stdout.String(), "built 1 memories (0 relations) from 1 source") {
+		t.Fatalf("stdout = %q, want ingest count with relations", stdout.String())
 	}
 
 	_, memories, closeStores := openStores(ctx, t, dbPath)
@@ -193,8 +193,10 @@ func TestMemoryIngestRunsConfiguredAgent(t *testing.T) {
 	if len(recalled) != 1 {
 		t.Fatalf("source memories length = %d, want 1", len(recalled))
 	}
-	if !strings.Contains(recalled[0].Text, "memory://test/source") {
-		t.Fatalf("memory text = %q, want source URI", recalled[0].Text)
+	// The fake agent echoes the prompt, so the stored memory proves the source
+	// context (its id) reached the agent through the ingest prompt.
+	if !strings.Contains(recalled[0].Text, "codex_session:test") {
+		t.Fatalf("memory text = %q, want the source id in the prompt", recalled[0].Text)
 	}
 }
 

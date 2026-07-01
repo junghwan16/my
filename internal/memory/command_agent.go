@@ -147,28 +147,43 @@ func decodeAgentMemories(text string) ([]AgentMemory, bool) {
 	return memories, true
 }
 
+// ingestInstructions is the fixed leading section of every ingest prompt. It
+// spells out what makes a memory worth keeping (useful recall: knowledge that
+// changes a future agent's decision or action) and the exact JSON output
+// contract the parser expects, so agents actually produce typed, multi-memory,
+// linkable output instead of one prose blob. See CONTEXT.md for "Useful Recall".
+const ingestInstructions = `You are distilling one coding-agent session into durable, reusable memory for a future agent working in this same workspace.
+
+A good memory changes what a future agent decides or does. Capture things like: a decision and why it was made, a non-obvious fact about this codebase, a gotcha or constraint, a convention, or how a component works. Write each memory in your own words — do not transcribe or quote the session. Skip play-by-play narration, transient chatter, secrets, and anything a future agent could trivially re-derive.
+
+Prefer a few focused, self-contained memories over one long dump; each should stand alone and be recallable on its own topic. If the session holds nothing worth reusing, output an empty array: [].
+
+Output ONLY a JSON array of memory objects — no prose before or after:
+[
+  {
+    "kind": "decision | fact | gotcha | convention | summary",
+    "text": "the reusable knowledge, written in your own words",
+    "relates_to": ["<id of an existing memory listed below>"]
+  }
+]
+- "text" is required. "kind" is one short label from the list (default "summary"). "relates_to" is optional.
+- Only put ids into relates_to that appear in brackets in the existing-memory list below; any other id is dropped.
+`
+
 func buildIngestPrompt(input AgentInput) string {
 	var b strings.Builder
-	b.WriteString("Turn this source into durable memory.\n")
-	b.WriteString("A Memory is a short, reusable note a future coding agent can act on. Do not copy " +
-		"the session text; explain the useful lesson in your own words.\n")
-	fmt.Fprintf(&b, "Source ID: %s\n", input.Source.ID)
-	fmt.Fprintf(&b, "Source kind: %s\n", input.Source.Kind)
-	fmt.Fprintf(&b, "Source URI: %s\n", input.Source.URI)
-	fmt.Fprintf(&b, "Workspace: %s\n\n", input.Source.Scope.Value)
+	b.WriteString(ingestInstructions)
+	fmt.Fprintf(&b, "\nSource: %s in workspace %s (id %s)\n\n",
+		input.Source.Kind, input.Source.Scope.Value, input.Source.ID)
 
 	writeRelatedMemories(&b, input.RelatedMemories)
 
-	b.WriteString("Source sample (reference only; do not quote it verbatim):\n")
-	for _, event := range sampleEvents(input.Events, maxPromptEvents) {
+	b.WriteString("Session excerpt (evenly sampled across the whole session; reference only, do not quote it):\n")
+	for _, event := range sampleEvents(substantiveEvents(input.Events), maxPromptEvents) {
 		if b.Len() >= maxPromptBytes {
 			break
 		}
-		text := event.Text
-		if text == "" {
-			text = event.Type
-		}
-		fmt.Fprintf(&b, "- %s %s: %s\n", event.Type, event.Role, text)
+		fmt.Fprintf(&b, "- %s: %s\n", eventLabel(event), event.Text)
 	}
 
 	return truncateUTF8(b.String(), maxPromptBytes)
@@ -179,42 +194,59 @@ func buildIngestPrompt(input AgentInput) string {
 // is already known instead of ingesting the source in isolation.
 func writeRelatedMemories(b *strings.Builder, related []RecallResult) {
 	if len(related) == 0 {
-		b.WriteString("Existing related memory: none yet; this is the first memory for this context.\n\n")
+		b.WriteString("Existing related memory: none yet — this is the first memory for this workspace context.\n\n")
 		return
 	}
 
-	b.WriteString("Existing related memory (already known; connect this source to it, don't repeat it). " +
-		"Each line starts with the memory id in brackets:\n")
+	b.WriteString("Existing related memory for this workspace — build on it (confirm, extend, update, or " +
+		"contradict it; don't repeat it). Each line starts with the memory id in brackets:\n")
 	for _, recallResult := range related {
 		if b.Len() >= maxRelatedMemoryBytes {
 			break
 		}
 		text := truncateUTF8(recallResult.Text, maxRelatedItemBytes)
-		fmt.Fprintf(b, "- [%s] (%s, %s) %s\n", recallResult.MemoryID, recallResult.Agent, recallResult.Kind, text)
+		fmt.Fprintf(b, "- [%s] (%s) %s\n", recallResult.MemoryID, recallResult.Kind, text)
 	}
-	b.WriteString("Confirm, extend, update, or contradict the above where this source bears on it; " +
-		"otherwise call out only what is genuinely new.\n")
-	b.WriteString("When a new memory continues one of the existing memories above, name that memory's id " +
-		"in its `relates_to` array (a JSON list of the bracketed ids). Only ids listed above are allowed.\n\n")
+	b.WriteString("When a new memory continues one of these, put that memory's bracketed id in its relates_to.\n\n")
 }
 
 // relatedMemoryQuery builds the recall query text for a source before it is
-// ingested, from the same evenly-sampled events buildIngestPrompt shows the
-// agent, so the recall reflects the same material the agent will read.
+// ingested, from the same substantive, evenly-sampled events buildIngestPrompt
+// shows the agent, so the recall reflects the same material the agent will read.
 func relatedMemoryQuery(events []sourcespkg.SourceEvent) string {
 	var b strings.Builder
-	for _, event := range sampleEvents(events, maxPromptEvents) {
+	for _, event := range sampleEvents(substantiveEvents(events), maxPromptEvents) {
 		if b.Len() >= maxRelatedQueryBytes {
 			break
 		}
-		text := event.Text
-		if text == "" {
-			text = event.Type
-		}
-		b.WriteString(text)
+		b.WriteString(event.Text)
 		b.WriteString("\n")
 	}
 	return truncateUTF8(strings.TrimSpace(b.String()), maxRelatedQueryBytes)
+}
+
+// substantiveEvents keeps only events carrying real text, dropping structural
+// rows (session_meta, file-history-snapshot, empty response items, mode markers)
+// that otherwise waste the prompt budget and dilute the evenly-sampled excerpt
+// with noise like "response_item : response_item".
+func substantiveEvents(events []sourcespkg.SourceEvent) []sourcespkg.SourceEvent {
+	kept := make([]sourcespkg.SourceEvent, 0, len(events))
+	for _, event := range events {
+		if strings.TrimSpace(event.Text) == "" {
+			continue
+		}
+		kept = append(kept, event)
+	}
+	return kept
+}
+
+// eventLabel picks the most informative prefix for a sampled event line: the
+// speaker role when present (user/assistant), otherwise the event type.
+func eventLabel(event sourcespkg.SourceEvent) string {
+	if event.Role != "" {
+		return event.Role
+	}
+	return event.Type
 }
 
 // sampleEvents selects at most maxEvents events spread evenly across the session,
