@@ -1,0 +1,26 @@
+# Kagome user dictionary for domain/loan terms (issue #8).
+#
+# mecab-ko-dic over-segments unknown loanwords/technical terms
+# (e.g. 마이그레이션 -> 마/이/그레/이/션), which pollutes the FTS index with
+# super-frequent fragments and destabilizes domain-term matching. Each entry
+# here pins a term so it stays a single morpheme token at both index and query
+# time.
+#
+# Format (kagome-dict UserDict, 4 comma-separated columns):
+#   surface,segmentation,reading,POS
+# - surface:      the term as it appears in text
+# - segmentation: space-separated sub-tokens; use the surface itself to keep it whole
+# - reading:      space-separated readings, one per segmentation token (same count)
+# - POS:          part-of-speech tag; 명사 (noun) for these terms
+#
+# Keep this list small and extensible: add a term surfaced by dogfooding when
+# Kagome splits it into meaningless fragments.
+마이그레이션,마이그레이션,마이그레이션,명사
+임베딩,임베딩,임베딩,명사
+리팩터링,리팩터링,리팩터링,명사
+토크나이저,토크나이저,토크나이저,명사
+하이브리드,하이브리드,하이브리드,명사
+스키마,스키마,스키마,명사
+인덱스,인덱스,인덱스,명사
+커밋,커밋,커밋,명사
+브랜치,브랜치,브랜치,명사

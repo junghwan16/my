@@ -3,6 +3,7 @@ module github.com/junghwan16/my
 go 1.25.7
 
 require (
+	github.com/ikawaha/kagome-dict v1.1.7
 	github.com/ikawaha/kagome-dict-ko v1.1.0
 	github.com/ikawaha/kagome/v2 v2.11.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
@@ -16,7 +17,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/ikawaha/kagome-dict v1.1.7 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
