@@ -34,6 +34,8 @@ var assets embed.FS
 type recaller interface {
 	Recall(ctx context.Context, task, scope string, limit int) ([]memoriespkg.RecallResult, error)
 	Scopes(ctx context.Context) ([]sourcespkg.Scope, error)
+	Graph(ctx context.Context, scope string, cap int) (memoriespkg.Graph, error)
+	MemoryNeighborhood(ctx context.Context, id memoriespkg.MemoryID) (memoriespkg.Graph, bool, error)
 }
 
 // compile-time check that *memories.Recaller satisfies the consumed interface.
@@ -76,8 +78,16 @@ func (s *Server) routes() http.Handler {
 
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(static)))
+	// Serve the graph page at the clean /graph path (the file is graph.html), so
+	// the provenance view has a shareable URL alongside the search page at /.
+	mux.HandleFunc("/graph", func(w http.ResponseWriter, r *http.Request) {
+		r.URL.Path = "/graph.html"
+		http.FileServer(http.FS(static)).ServeHTTP(w, r)
+	})
 	mux.HandleFunc("/api/recall", s.handleRecall)
 	mux.HandleFunc("/api/scopes", s.handleScopes)
+	mux.HandleFunc("/api/graph", s.handleGraph)
+	mux.HandleFunc("/api/graph/memory", s.handleMemoryNeighborhood)
 	return mux
 }
 
@@ -166,6 +176,77 @@ func (s *Server) handleScopes(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(scopesResponse{Scopes: dtos}); err != nil {
 		// The response is already partially written, so we can only stop; the
 		// client sees a truncated body.
+		return
+	}
+}
+
+// handleGraph serves the scope-scoped provenance graph for the /graph page:
+// Source and Memory nodes with Link (Source->Memory) edges, each Memory sized by
+// its Link fan-in, plus an aggregate panel (total Sources, Memories, average
+// Sources per Memory) computed over the whole scope regardless of the node cap.
+// It reads the graph read-model (never the recall path) and writes it as JSON.
+// The scope parameter follows /api/recall (absent uses the default, present-but-
+// empty spans every scope); the cap parameter bounds the returned node count and
+// falls back to the store default when absent.
+func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	scope := s.scope(r)
+	cap, err := parseLimit(r.URL.Query().Get("cap"))
+	if err != nil {
+		http.Error(w, "cap must be a non-negative integer", http.StatusBadRequest)
+		return
+	}
+
+	graph, err := s.recaller.Graph(r.Context(), scope, cap)
+	if err != nil {
+		http.Error(w, "graph failed", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, graph)
+}
+
+// handleMemoryNeighborhood serves the click-to-expand drilldown for one Memory:
+// the Memory node plus every Source that melted into it and their Link edges,
+// unrestricted by scope so expanding reveals the Memory's full provenance. It
+// reads the id parameter, loads the neighborhood from the read-model, and writes
+// it as JSON. A missing id is a client error; an unknown Memory is 404 so the UI
+// can render a clean miss.
+func (s *Server) handleMemoryNeighborhood(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+
+	graph, found, err := s.recaller.MemoryNeighborhood(r.Context(), memoriespkg.MemoryID(id))
+	if err != nil {
+		http.Error(w, "graph failed", http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, graph)
+}
+
+// writeJSON encodes v as the JSON response body with the shared content type. A
+// mid-write encode failure leaves the client a truncated body — the response is
+// already partially written, so there is nothing further to signal.
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
 		return
 	}
 }

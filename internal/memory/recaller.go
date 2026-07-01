@@ -19,6 +19,8 @@ type MemoryReader interface {
 	RecallResultByID(ctx context.Context, id MemoryID) (RecallResult, bool, error)
 	Scopes(ctx context.Context) ([]sourcespkg.Scope, error)
 	Stats(ctx context.Context) (Stats, error)
+	Graph(ctx context.Context, scope string, cap int) (Graph, error)
+	MemoryNeighborhood(ctx context.Context, id MemoryID) (Graph, bool, error)
 }
 
 // Recaller finds relevant memory. It can load the memories linked to one Source,
@@ -94,4 +96,21 @@ func (r *Recaller) Scopes(ctx context.Context) ([]sourcespkg.Scope, error) {
 // counts) so the MCP status tool can report it. It delegates to the store.
 func (r *Recaller) Stats(ctx context.Context) (Stats, error) {
 	return r.store.Stats(ctx)
+}
+
+// Graph builds the scope-scoped provenance graph (Source and Memory nodes with
+// Link edges, per-Memory fan-in, and the aggregate panel) for the web /graph
+// page. It delegates to the store's read-model and never touches the recall
+// path. An empty scope spans every scope; a non-positive cap uses the store
+// default.
+func (r *Recaller) Graph(ctx context.Context, scope string, cap int) (Graph, error) {
+	return r.store.Graph(ctx, scope, cap)
+}
+
+// MemoryNeighborhood is the click-to-expand drilldown backing the /graph page:
+// one Memory plus the Sources that melted into it and their Link edges,
+// unrestricted by scope. found is false when no Memory has the id. It delegates
+// to the store's read-model.
+func (r *Recaller) MemoryNeighborhood(ctx context.Context, id MemoryID) (Graph, bool, error) {
+	return r.store.MemoryNeighborhood(ctx, id)
 }
