@@ -9,6 +9,7 @@ import (
 
 	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 	sourcespkg "github.com/junghwan16/gieok/internal/source"
+	"github.com/junghwan16/gieok/internal/storage"
 )
 
 // meltSourceIntoMemory records a Link (Source->Memory) by saving the source and
@@ -25,6 +26,30 @@ func meltSourceIntoMemory(ctx context.Context, t *testing.T, sources *sourcespkg
 	mem := memoriespkg.Memory{ID: memoriespkg.MemoryID(memID), Agent: "t", Kind: memoriespkg.MemoryKindSummary, Text: text, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
 	link := memoriespkg.Link{SourceID: src.ID, MemoryID: mem.ID, Kind: memoriespkg.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
 	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{mem}, []memoriespkg.Link{link}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// relateMemories records a Memory<->Memory Relation (ADR-0007) by inserting
+// directly into memory_relations on the shared database file, standing in for an
+// agent that authored a relates_to during ingest. Both memories must already
+// exist so the foreign keys hold. It lets a graph test drive Relation edges and
+// Relation degree without wiring the full ingest allowlist path.
+func relateMemories(ctx context.Context, t *testing.T, path, from, to string) {
+	t.Helper()
+	db, err := storage.OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}()
+	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(ctx, `INSERT INTO memory_relations
+		(from_memory_id, to_memory_id, kind, created_at, metadata_json)
+		VALUES (?, ?, 'relates', ?, '{}')`, from, to, now); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -79,18 +104,67 @@ func TestGraphReturnsScopedNodesAndLinkEdges(t *testing.T) {
 	}
 }
 
-// TestGraphMemoryFanInCountsMeltedSources proves a Memory node's fan-in is the
-// number of Sources that melted into it (its Link fan-in), which the UI turns
-// into node size/badge.
-func TestGraphMemoryFanInCountsMeltedSources(t *testing.T) {
+// TestGraphSourceSizeIsFanOut proves a Source node's size is its fan-out — the
+// number of distinct Memories that melted out of it — replacing the degenerate
+// per-Memory Link fan-in metric (ADR-0008).
+func TestGraphSourceSizeIsFanOut(t *testing.T) {
 	ctx := context.Background()
-	sources, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
+	path := filepath.Join(t.TempDir(), "m.db")
+	sources, memories, closeStores := openStores(ctx, t, path)
 	defer closeStores()
 
-	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s1", "/work/a"), "memory:hot", "hot memory")
-	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s2", "/work/a"), "memory:hot", "hot memory")
-	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s3", "/work/a"), "memory:hot", "hot memory")
-	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:c1", "/work/a"), "memory:cold", "cold memory")
+	// One prolific Source melts into three Memories (fan-out 3); a second Source
+	// melts into one (fan-out 1). The agent id must differ per memory so the
+	// re-link never deletes a prior memory of the same source.
+	for i, mem := range []string{"memory:a", "memory:b", "memory:c"} {
+		src := scopedSource("codex_session:hot", "/work/a")
+		if err := sources.SaveSource(ctx, src, nil); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
+		agent := "a" + string(rune('0'+i))
+		m := memoriespkg.Memory{ID: memoriespkg.MemoryID(mem), Agent: agent, Kind: memoriespkg.MemoryKindSummary, Text: mem, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+		link := memoriespkg.Link{SourceID: src.ID, MemoryID: m.ID, Kind: memoriespkg.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+		if err := memories.ReplaceSourceMemories(ctx, src.ID, agent, []memoriespkg.Memory{m}, []memoriespkg.Link{link}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:cold", "/work/a"), "memory:d", "d memory")
+
+	graph, err := memories.Graph(ctx, "/work/a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srcNodes, _ := nodesByKind(graph.Nodes)
+	fanOut := map[string]int{}
+	for _, n := range srcNodes {
+		fanOut[n.ID] = n.Size
+	}
+	if fanOut["codex_session:hot"] != 3 {
+		t.Fatalf("codex_session:hot fan-out = %d, want 3 (three melted memories)", fanOut["codex_session:hot"])
+	}
+	if fanOut["codex_session:cold"] != 1 {
+		t.Fatalf("codex_session:cold fan-out = %d, want 1", fanOut["codex_session:cold"])
+	}
+}
+
+// TestGraphMemorySizeIsRelationDegree proves a Memory node's size is its Relation
+// degree — how many other Memories it connects to via Memory<->Memory Relations,
+// counting both directions — replacing the degenerate Link fan-in metric.
+func TestGraphMemorySizeIsRelationDegree(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "m.db")
+	sources, memories, closeStores := openStores(ctx, t, path)
+	defer closeStores()
+
+	// A hub Memory relates to two others; one leaf relates only to the hub.
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s1", "/work/a"), "memory:hub", "hub")
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s2", "/work/a"), "memory:leafA", "leafA")
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s3", "/work/a"), "memory:leafB", "leafB")
+	// hub -> leafA, leafB -> hub. hub has degree 2, each leaf degree 1.
+	relateMemories(ctx, t, path, "memory:hub", "memory:leafA")
+	relateMemories(ctx, t, path, "memory:leafB", "memory:hub")
 
 	graph, err := memories.Graph(ctx, "/work/a", 0)
 	if err != nil {
@@ -98,15 +172,69 @@ func TestGraphMemoryFanInCountsMeltedSources(t *testing.T) {
 	}
 
 	_, memNodes := nodesByKind(graph.Nodes)
-	fanIn := map[string]int{}
+	degree := map[string]int{}
 	for _, n := range memNodes {
-		fanIn[n.ID] = n.FanIn
+		degree[n.ID] = n.Size
 	}
-	if fanIn["memory:hot"] != 3 {
-		t.Fatalf("memory:hot fan-in = %d, want 3 (three melted sources)", fanIn["memory:hot"])
+	if degree["memory:hub"] != 2 {
+		t.Fatalf("memory:hub relation degree = %d, want 2 (both directions counted)", degree["memory:hub"])
 	}
-	if fanIn["memory:cold"] != 1 {
-		t.Fatalf("memory:cold fan-in = %d, want 1", fanIn["memory:cold"])
+	if degree["memory:leafA"] != 1 || degree["memory:leafB"] != 1 {
+		t.Fatalf("leaf degrees = %d/%d, want 1/1", degree["memory:leafA"], degree["memory:leafB"])
+	}
+}
+
+// TestGraphReturnsRelationEdges proves the scoped graph returns Memory<->Memory
+// Relation edges alongside Link edges, so the /graph page can render them
+// distinctly. Relation edges only connect two in-scope, kept Memory nodes.
+func TestGraphReturnsRelationEdges(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "m.db")
+	sources, memories, closeStores := openStores(ctx, t, path)
+	defer closeStores()
+
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s1", "/work/a"), "memory:a", "a")
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s2", "/work/a"), "memory:b", "b")
+	// A memory in another scope must never appear as a Relation endpoint here.
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:x1", "/work/b"), "memory:x", "x")
+	relateMemories(ctx, t, path, "memory:a", "memory:b")
+	relateMemories(ctx, t, path, "memory:a", "memory:x") // cross-scope: must be excluded
+
+	graph, err := memories.Graph(ctx, "/work/a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Relations) != 1 {
+		t.Fatalf("relation edges = %d, want 1 (a->b in scope; a->x is cross-scope)", len(graph.Relations))
+	}
+	rel := graph.Relations[0]
+	if rel.FromMemoryID != "memory:a" || rel.ToMemoryID != "memory:b" {
+		t.Fatalf("relation edge = %+v, want memory:a -> memory:b", rel)
+	}
+}
+
+// TestGraphNoRelationsDegradesCleanly proves a scope with zero Relations still
+// returns the provenance graph with a non-nil empty Relations slice, so the view
+// degrades to provenance-only with no regression.
+func TestGraphNoRelationsDegradesCleanly(t *testing.T) {
+	ctx := context.Background()
+	sources, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
+	defer closeStores()
+
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s1", "/work/a"), "memory:a", "a")
+
+	graph, err := memories.Graph(ctx, "/work/a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if graph.Relations == nil {
+		t.Fatal("relations must be a non-nil empty slice when the scope has no relations")
+	}
+	if len(graph.Relations) != 0 {
+		t.Fatalf("relations = %d, want 0 for a relation-free scope", len(graph.Relations))
+	}
+	if len(graph.Nodes) == 0 || len(graph.Edges) == 0 {
+		t.Fatalf("provenance graph must still render: %d nodes / %d edges", len(graph.Nodes), len(graph.Edges))
 	}
 }
 
@@ -183,8 +311,8 @@ func TestGraphEmptyStoreAndScopeReturnCleanEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if empty.Nodes == nil || empty.Edges == nil {
-		t.Fatalf("empty-store nodes/edges must be non-nil empty slices, got %#v", empty)
+	if empty.Nodes == nil || empty.Edges == nil || empty.Relations == nil {
+		t.Fatalf("empty-store nodes/edges/relations must be non-nil empty slices, got %#v", empty)
 	}
 	if len(empty.Nodes) != 0 || len(empty.Edges) != 0 || empty.Truncated {
 		t.Fatalf("empty store graph = %#v, want no nodes/edges and not truncated", empty)
@@ -232,6 +360,43 @@ func TestMemoryNeighborhoodExpandsProvenance(t *testing.T) {
 	}
 	if len(graph.Edges) != 2 {
 		t.Fatalf("neighborhood edges = %d, want 2 Link edges", len(graph.Edges))
+	}
+}
+
+// TestMemoryNeighborhoodIncludesConnectedMemories proves the drilldown expands
+// into connected Memory neighbors (via Relations), not just derived Sources, and
+// returns the Relation edges to them.
+func TestMemoryNeighborhoodIncludesConnectedMemories(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "m.db")
+	sources, memories, closeStores := openStores(ctx, t, path)
+	defer closeStores()
+
+	// center relates to two other memories (one via from, one via to); it also
+	// has a derived source.
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s1", "/work/a"), "memory:center", "center")
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s2", "/work/a"), "memory:nbrA", "nbrA")
+	meltSourceIntoMemory(ctx, t, sources, memories, scopedSource("codex_session:s3", "/work/b"), "memory:nbrB", "nbrB")
+	relateMemories(ctx, t, path, "memory:center", "memory:nbrA")
+	relateMemories(ctx, t, path, "memory:nbrB", "memory:center")
+
+	graph, found, err := memories.MemoryNeighborhood(ctx, "memory:center")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("memory:center not found, want found")
+	}
+	_, memNodes := nodesByKind(graph.Nodes)
+	ids := map[string]bool{}
+	for _, n := range memNodes {
+		ids[n.ID] = true
+	}
+	if !ids["memory:center"] || !ids["memory:nbrA"] || !ids["memory:nbrB"] {
+		t.Fatalf("neighborhood memory nodes = %v, want center + both connected neighbors", ids)
+	}
+	if len(graph.Relations) != 2 {
+		t.Fatalf("neighborhood relation edges = %d, want 2 (both directions of relation)", len(graph.Relations))
 	}
 }
 

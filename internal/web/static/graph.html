@@ -91,11 +91,16 @@
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
-    // A Memory node's diameter grows with its Link fan-in (how many Sources
-    // melted into it), so the "melted-in-ness" is visible at a glance. Sources
-    // are fixed, smaller squares.
-    function memorySize(fanIn) {
-      return 24 + 8 * Math.min(fanIn || 0, 12);
+    // A node's diameter grows with its "melted-in-ness" metric (data(size)): for
+    // a Memory that is its Relation degree (how many other Memories it connects
+    // to), for a Source its fan-out (how many Memories melted out of it). Both
+    // clamp so one huge node never crowds the canvas.
+    function memorySize(size) {
+      return 24 + 8 * Math.min(size || 0, 12);
+    }
+
+    function sourceSize(size) {
+      return 16 + 4 * Math.min(size || 0, 12);
     }
 
     const cy = cytoscape({
@@ -120,17 +125,25 @@
           "font-size": "8px",
           "text-valign": "bottom",
           "text-margin-y": 3,
-          "width": 18,
-          "height": 18,
+          "width": "data(size)",
+          "height": "data(size)",
         } },
-        { selector: "node.badge", style: { "border-width": 3, "border-color": "#f59e0b" } },
-        { selector: "edge", style: {
+        // A Link edge (Source->Memory provenance): thin grey, directed.
+        { selector: "edge[rel='link']", style: {
           "width": 1,
           "line-color": "#cbd5e1",
           "target-arrow-color": "#cbd5e1",
           "target-arrow-shape": "triangle",
           "curve-style": "bezier",
           "arrow-scale": 0.7,
+        } },
+        // A Relation edge (Memory<->Memory, ADR-0007): thicker, coloured, dashed
+        // and undirected, so it reads as a distinct family from provenance Links.
+        { selector: "edge[rel='relation']", style: {
+          "width": 2.5,
+          "line-color": "#8b5cf6",
+          "line-style": "dashed",
+          "curve-style": "bezier",
         } },
       ],
       layout: { name: "cose", animate: false },
@@ -142,9 +155,12 @@
       return text.length > max ? text.slice(0, max) + "…" : text;
     }
 
-    // toElements maps a graph read-model (nodes + Link edges) to cytoscape
-    // elements. Memory nodes are sized by fan-in and badged when several Sources
-    // melted into them; Source nodes are fixed. Edges are Source→Memory Links.
+    // toElements maps a graph read-model (nodes + Link edges + Relation edges) to
+    // cytoscape elements. A Memory node is sized by its Relation degree and a
+    // Source node by its fan-out (both from data(size)). Link edges (Source→Memory
+    // provenance) and Relation edges (Memory↔Memory) are tagged rel so the
+    // stylesheet renders the two families distinctly. A scope with no Relations
+    // simply adds no relation edges, degrading to the provenance-only view.
     function toElements(graph) {
       const elements = [];
       const nodeIds = new Set();
@@ -155,18 +171,30 @@
           kind: node.kind,
           label: node.label,
           shortLabel: shortLabel(node.label, node.kind),
-          fanIn: node.fan_in || 0,
+          degree: node.kind === "memory" ? (node.size || 0) : 0,
+          fanOut: node.kind === "source" ? (node.size || 0) : 0,
           scope: (node.scope && node.scope.value) || "",
-          size: node.kind === "memory" ? memorySize(node.fan_in) : 18,
-        }, classes: (node.kind === "memory" && (node.fan_in || 0) >= 3) ? "badge" : "" });
+          size: node.kind === "memory" ? memorySize(node.size) : sourceSize(node.size),
+        } });
       }
       for (const edge of graph.edges || []) {
-        // Guard against an edge referencing a capped-out node.
+        // Guard against a Link edge referencing a capped-out node.
         if (!nodeIds.has(edge.source_id) || !nodeIds.has(edge.memory_id)) continue;
         elements.push({ data: {
           id: "e:" + edge.source_id + ":" + edge.memory_id,
+          rel: "link",
           source: edge.source_id,
           target: edge.memory_id,
+        } });
+      }
+      for (const rel of graph.relations || []) {
+        // Guard against a Relation edge referencing a capped-out Memory node.
+        if (!nodeIds.has(rel.from_memory_id) || !nodeIds.has(rel.to_memory_id)) continue;
+        elements.push({ data: {
+          id: "r:" + rel.from_memory_id + ":" + rel.to_memory_id,
+          rel: "relation",
+          source: rel.from_memory_id,
+          target: rel.to_memory_id,
         } });
       }
       return elements;
@@ -201,7 +229,7 @@
         const nodeCount = (graph.nodes || []).length;
         statusEl.textContent = nodeCount === 0
           ? "이 범위에는 표시할 노드가 없습니다."
-          : `${nodeCount}개 노드 · 기억을 클릭하면 원본 이웃을 펼칩니다.`;
+          : `${nodeCount}개 노드 · 기억을 클릭하면 원본·연결 기억 이웃을 펼칩니다.`;
       } catch (err) {
         statusEl.textContent = "그래프를 불러오는 중 오류가 발생했습니다.";
       }
@@ -232,7 +260,7 @@
       const node = event.target;
       selectionEl.innerHTML =
         `<strong>기억</strong> ${escapeHtml(node.data("id"))}<br />` +
-        `원본 ${node.data("fanIn")}개 녹아듦` +
+        `기억 ${node.data("degree")}개와 연결` +
         `<div class="sel-text">${escapeHtml(node.data("label"))}</div>`;
       expandMemory(node.data("id"));
     });
@@ -241,7 +269,7 @@
       const node = event.target;
       selectionEl.innerHTML =
         `<strong>원본</strong> ${escapeHtml(node.data("id"))}<br />` +
-        `범위 ${escapeHtml(node.data("scope"))}`;
+        `기억 ${node.data("fanOut")}개로 녹음 · 범위 ${escapeHtml(node.data("scope"))}`;
     });
 
     // loadScopes populates the scope selector from /api/scopes (shared with the

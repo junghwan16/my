@@ -181,8 +181,9 @@ func (s *Server) handleScopes(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGraph serves the scope-scoped provenance graph for the /graph page:
-// Source and Memory nodes with Link (Source->Memory) edges, each Memory sized by
-// its Link fan-in, plus an aggregate panel (total Sources, Memories, average
+// Source and Memory nodes with Link (Source->Memory) and Relation
+// (Memory<->Memory) edges, Source nodes sized by fan-out and Memory nodes by
+// Relation degree, plus an aggregate panel (total Sources, Memories, average
 // Sources per Memory) computed over the whole scope regardless of the node cap.
 // It reads the graph read-model (never the recall path) and writes it as JSON.
 // The scope parameter follows /api/recall (absent uses the default, present-but-
@@ -211,8 +212,10 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMemoryNeighborhood serves the click-to-expand drilldown for one Memory:
-// the Memory node plus every Source that melted into it and their Link edges,
-// unrestricted by scope so expanding reveals the Memory's full provenance. It
+// the Memory node, every Source that melted into it with their Link edges, and
+// every Memory it connects to by a Relation with those Relation edges, all
+// unrestricted by scope so expanding reveals the Memory's full provenance and
+// Relations. It
 // reads the id parameter, loads the neighborhood from the read-model, and writes
 // it as JSON. A missing id is a client error; an unknown Memory is 404 so the UI
 // can render a clean miss.
