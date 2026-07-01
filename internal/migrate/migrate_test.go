@@ -8,7 +8,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/junghwan16/my/internal/storage"
+	"github.com/junghwan16/gieok/internal/storage"
 )
 
 func TestApplyCreatesSchemaAndRecordsVersion(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/junghwan16/my/internal/mcp"
-	"github.com/junghwan16/my/internal/memory"
+	"github.com/junghwan16/gieok/internal/mcp"
+	"github.com/junghwan16/gieok/internal/memory"
 )
 
 func TestStatusReportsIndexHealth(t *testing.T) {

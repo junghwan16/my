@@ -10,8 +10,8 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/junghwan16/my/internal/jsonutil"
-	"github.com/junghwan16/my/internal/source"
+	"github.com/junghwan16/gieok/internal/jsonutil"
+	"github.com/junghwan16/gieok/internal/source"
 )
 
 // The store row-model mappings live in rows.go; the schema lives in the

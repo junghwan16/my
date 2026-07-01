@@ -5,7 +5,7 @@ status: accepted
 # 스키마 마이그레이션은 goose(embedded SQL) + 파괴적 변경 전 자동 백업으로 관리한다
 
 이 프로젝트는 완전한 로컬 데스크탑 앱이다: 사용자당 SQLite 파일 1개
-(`~/.local/share/my/memory/my.db`)가 유일본이고, 마이그레이션 커맨드를 사용자가
+(`~/.local/share/gieok/memory/gieok.db`)가 유일본이고, 마이그레이션 커맨드를 사용자가
 직접 칠 일이 없으며, 단일 바이너리로 배포된다. 초기 구현은 `source.Migrate` /
 `memory.Migrate` 가 각각 `CREATE TABLE IF NOT EXISTS` 를 실행할 뿐, 버전 개념이
 없어 컬럼 진화·이력·순서 보장이 불가능했다.
@@ -20,7 +20,7 @@ status: accepted
 - `source.Migrate`/`memory.Migrate` 는 제거했고, 도메인 패키지는 row 모델과
   쿼리만 소유한다.
 - **버전 추적**: goose 의 `goose_db_version` 테이블(라이브러리 기본).
-- **자동 실행**: goose Provider API 로 `cmd/my` 의 `withStores` 가 DB 를 열자마자
+- **자동 실행**: goose Provider API 로 `cmd/gieok` 의 `withStores` 가 DB 를 열자마자
   `migrate.Apply` 를 호출한다. 사용자에게 마이그레이션은 보이지 않는다.
 - **순서**: 파일 번호가 곧 버전이라 `00001`(sources) → `00002`(memory_links)
   순으로 FK 의존(`memory_links → sources`)이 보장된다.

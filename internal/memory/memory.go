@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/junghwan16/my/internal/source"
+	"github.com/junghwan16/gieok/internal/source"
 )
 
 // MemoryID uniquely identifies a generated memory.

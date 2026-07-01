@@ -8,7 +8,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/junghwan16/my/internal/jsonutil"
+	"github.com/junghwan16/gieok/internal/jsonutil"
 )
 
 // The store schema and row-model mappings live in schema.go.

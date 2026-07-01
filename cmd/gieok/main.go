@@ -14,13 +14,13 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/junghwan16/my/internal/embed"
-	"github.com/junghwan16/my/internal/mcp"
-	"github.com/junghwan16/my/internal/memory"
-	"github.com/junghwan16/my/internal/migrate"
-	"github.com/junghwan16/my/internal/source"
-	"github.com/junghwan16/my/internal/storage"
-	"github.com/junghwan16/my/internal/tokenize"
+	"github.com/junghwan16/gieok/internal/embed"
+	"github.com/junghwan16/gieok/internal/mcp"
+	"github.com/junghwan16/gieok/internal/memory"
+	"github.com/junghwan16/gieok/internal/migrate"
+	"github.com/junghwan16/gieok/internal/source"
+	"github.com/junghwan16/gieok/internal/storage"
+	"github.com/junghwan16/gieok/internal/tokenize"
 )
 
 func main() {
@@ -46,11 +46,11 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 }
 
 // errUsage is the top-level usage error.
-var errUsage = errors.New("usage: my <memory|mcp>")
+var errUsage = errors.New("usage: gieok <memory|mcp>")
 
 func runMemory(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, now time.Time) error {
 	if len(args) < 2 {
-		return errors.New("usage: my memory <import|ingest|recall>")
+		return errors.New("usage: gieok memory <import|ingest|recall>")
 	}
 
 	switch args[1] {
@@ -61,7 +61,7 @@ func runMemory(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	case "recall":
 		return runMemoryRecall(ctx, args, stdout, stderr)
 	default:
-		return errors.New("usage: my memory <import|ingest|recall>")
+		return errors.New("usage: gieok memory <import|ingest|recall>")
 	}
 }
 
@@ -187,7 +187,7 @@ type memoryRecallConfig struct {
 
 func parseMemoryRecallConfig(args []string, stderr io.Writer) (memoryRecallConfig, error) {
 	if len(args) < 2 || args[0] != "memory" || args[1] != "recall" {
-		return memoryRecallConfig{}, errors.New("usage: my memory recall [task] [--scope <value>] [--all-scopes] [--limit <n>] [--json] [--store <sqlite-db>]")
+		return memoryRecallConfig{}, errors.New("usage: gieok memory recall [task] [--scope <value>] [--all-scopes] [--limit <n>] [--json] [--store <sqlite-db>]")
 	}
 
 	flags := flag.NewFlagSet("memory recall", flag.ContinueOnError)
@@ -335,7 +335,7 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	})
 }
 
-// parseMCPConfig accepts "my mcp [serve] [--store <path>]" and resolves the
+// parseMCPConfig accepts "gieok mcp [serve] [--store <path>]" and resolves the
 // store path, defaulting to the shared import/ingest store.
 func parseMCPConfig(args []string, stderr io.Writer) (string, error) {
 	flagArgs := args[1:]
@@ -368,7 +368,7 @@ type memoryIngestConfig struct {
 
 func parseMemoryImportConfig(args []string, stderr io.Writer) (memoryImportConfig, error) {
 	if len(args) < 2 || args[0] != "memory" || args[1] != "import" {
-		return memoryImportConfig{}, errors.New("usage: my memory import --from <path> --store <sqlite-db>")
+		return memoryImportConfig{}, errors.New("usage: gieok memory import --from <path> --store <sqlite-db>")
 	}
 
 	flags := flag.NewFlagSet("memory import", flag.ContinueOnError)
@@ -394,7 +394,7 @@ func parseMemoryImportConfig(args []string, stderr io.Writer) (memoryImportConfi
 
 func parseMemoryIngestConfig(args []string, stderr io.Writer) (memoryIngestConfig, error) {
 	if len(args) < 2 || args[0] != "memory" || args[1] != "ingest" {
-		return memoryIngestConfig{}, errors.New("usage: my memory ingest --agent <name=command[,arg...]> --store <sqlite-db>")
+		return memoryIngestConfig{}, errors.New("usage: gieok memory ingest --agent <name=command[,arg...]> --store <sqlite-db>")
 	}
 
 	flags := flag.NewFlagSet("memory ingest", flag.ContinueOnError)
@@ -405,7 +405,7 @@ func parseMemoryIngestConfig(args []string, stderr io.Writer) (memoryIngestConfi
 	skipExisting := flags.Bool("skip-existing", false, "Skip sources already ingested by an agent")
 	var agentSpecs repeatedFlag
 	var sourceIDs repeatedFlag
-	flags.Var(&agentSpecs, "agent", "Agent command as name=command[,arg...]")
+	flags.Var(&agentSpecs, "agent", "Agent command as name=command[,arg...], or a bare default agent name (claude, codex, pi)")
 	flags.Var(&sourceIDs, "source-id", "Source ID to ingest; repeatable")
 	if err := flags.Parse(args[2:]); err != nil {
 		return memoryIngestConfig{}, err
@@ -429,7 +429,7 @@ func parseMemoryIngestConfig(args []string, stderr io.Writer) (memoryIngestConfi
 
 	agents := make([]memory.Agent, 0, len(agentSpecs))
 	for _, spec := range agentSpecs {
-		agent, err := memory.ParseAgentSpec(spec)
+		agent, err := memory.ResolveAgentSpec(spec)
 		if err != nil {
 			return memoryIngestConfig{}, err
 		}
@@ -475,5 +475,5 @@ func defaultStorePath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("find home directory: %w", err)
 	}
-	return filepath.Join(home, ".local", "share", "my", "memory", "my.db"), nil
+	return filepath.Join(home, ".local", "share", "gieok", "memory", "gieok.db"), nil
 }

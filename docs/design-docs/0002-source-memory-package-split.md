@@ -45,7 +45,7 @@ Go 관례(인터페이스는 사용하는 쪽에서 정의)를 따른다.
   직접 조회하지 않고 `source_id` 값만 쓰므로 스토어가 깨끗이 갈린다.
 - **마이그레이션 순서**: `memory_links.source_id` 가 `sources(id)` 를 참조하므로
   호출자는 `source.Migrate` 를 먼저, `memory.Migrate` 를 나중에 실행한다.
-  `cmd/my` 의 `withStores` 가 이 순서를 보장한다.
+  `cmd/gieok` 의 `withStores` 가 이 순서를 보장한다.
 - **CLI 어댑터 이동**: 기본 에이전트 구성과 `name=cmd` spec 파싱은 도메인
   지식이므로 `main.go` 에서 `memory.DefaultAgents` / `memory.ParseAgentSpec`
   으로 옮겼다. `main` 은 플래그 파싱과 배선만 담당한다.

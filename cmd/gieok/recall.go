@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/junghwan16/my/internal/memory"
+	"github.com/junghwan16/gieok/internal/memory"
 )
 
 // writeRecallJSON emits the recall result as a stable structured document. The

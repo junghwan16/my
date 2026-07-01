@@ -1,4 +1,4 @@
-module github.com/junghwan16/my
+module github.com/junghwan16/gieok
 
 go 1.25.7
 

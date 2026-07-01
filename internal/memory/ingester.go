@@ -10,8 +10,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/junghwan16/my/internal/jsonutil"
-	"github.com/junghwan16/my/internal/source"
+	"github.com/junghwan16/gieok/internal/jsonutil"
+	"github.com/junghwan16/gieok/internal/source"
 )
 
 // SourceReader supplies the sources an ingest run reads. *source.Store satisfies it.
@@ -27,6 +27,15 @@ type MemoryWriter interface {
 	ReplaceSourceMemories(context.Context, source.SourceID, string, []Memory, []Link) error
 }
 
+// MemoryStore reads and writes memories. *Store satisfies it. Ingest writes new
+// memories through MemoryWriter and reads through MemoryReader to recall
+// existing memory an agent should build on rather than ingesting each source
+// in isolation.
+type MemoryStore interface {
+	MemoryWriter
+	MemoryReader
+}
+
 // Agent turns a source and its events into memories.
 type Agent interface {
 	Name() string
@@ -37,6 +46,12 @@ type Agent interface {
 type AgentInput struct {
 	Source source.Source
 	Events []source.SourceEvent
+	// RelatedMemories is existing memory already recalled as relevant to this
+	// source (same scope, recalled by the source's own sampled content),
+	// excluding any memory already linked to this source. It lets an agent
+	// connect a new memory to what it already knows instead of summarizing
+	// the source in isolation.
+	RelatedMemories []Recollection
 }
 
 // AgentOutput is the memory material produced by one agent.
@@ -55,6 +70,10 @@ type AgentMemory struct {
 // set IngestOptions.Concurrency. Agents typically spawn external LLM processes,
 // so an unbounded fan-out would exhaust local resources.
 const defaultConcurrency = 4
+
+// relatedMemoryLimit caps how much existing memory is recalled as context for
+// one source, bounding both the recall cost and the prompt size.
+const relatedMemoryLimit = 5
 
 // IngestOptions narrows which sources are processed and tunes the run.
 type IngestOptions struct {
@@ -77,16 +96,18 @@ type IngestResult struct {
 // Ingester runs agents over recorded sources and links the memories they produce.
 type Ingester struct {
 	sources  SourceReader
-	memories MemoryWriter
+	memories MemoryStore
+	related  *Recaller
 	agents   []Agent
 	logger   *slog.Logger
 }
 
-// NewIngester wires an Ingester to its source reader, memory writer, and agents.
-func NewIngester(sources SourceReader, memories MemoryWriter, agents []Agent, logger *slog.Logger) *Ingester {
+// NewIngester wires an Ingester to its source reader, memory store, and agents.
+func NewIngester(sources SourceReader, memories MemoryStore, agents []Agent, logger *slog.Logger) *Ingester {
 	return &Ingester{
 		sources:  sources,
 		memories: memories,
+		related:  NewRecaller(memories),
 		agents:   agents,
 		logger:   loggerOrDiscard(logger),
 	}
@@ -167,6 +188,11 @@ func (in *Ingester) ingestSource(
 		return 0, 0, nil
 	}
 
+	related, err := in.recallRelatedMemories(ctx, src, events)
+	if err != nil {
+		return 0, 0, err
+	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -180,7 +206,7 @@ func (in *Ingester) ingestSource(
 				results <- agentRunResult{agent: agent.Name(), err: runCtx.Err()}
 				return
 			}
-			output, err := agent.Ingest(runCtx, AgentInput{Source: src, Events: events})
+			output, err := agent.Ingest(runCtx, AgentInput{Source: src, Events: events, RelatedMemories: related})
 			results <- agentRunResult{agent: agent.Name(), output: output, err: err}
 		}(agent)
 	}
@@ -215,6 +241,46 @@ func (in *Ingester) ingestSource(
 		return 0, agentErrors, fmt.Errorf("all ingest agents failed for source %q", src.ID)
 	}
 	return count, agentErrors, nil
+}
+
+// recallRelatedMemories finds existing memory relevant to a source before any
+// agent ingests it, so ingestion can connect new memory to what is already
+// known instead of treating every source as a blank slate. It recalls within
+// the source's own scope using the source's sampled content as the query, and
+// excludes any memory already linked to this exact source (its own prior
+// ingest, on a re-run) since that is not "other" existing knowledge.
+func (in *Ingester) recallRelatedMemories(
+	ctx context.Context,
+	src source.Source,
+	events []source.SourceEvent,
+) ([]Recollection, error) {
+	query := relatedMemoryQuery(events)
+	if query == "" {
+		return nil, nil
+	}
+
+	recalled, err := in.related.Recollect(ctx, query, src.Scope.Value, relatedMemoryLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	related := make([]Recollection, 0, len(recalled))
+	for _, recollection := range recalled {
+		if recollectionHasSource(recollection, src.ID) {
+			continue
+		}
+		related = append(related, recollection)
+	}
+	return related, nil
+}
+
+func recollectionHasSource(recollection Recollection, sourceID source.SourceID) bool {
+	for _, ref := range recollection.Sources {
+		if ref.ID == sourceID {
+			return true
+		}
+	}
+	return false
 }
 
 // selectAgents drops agents whose memories already exist for the source when

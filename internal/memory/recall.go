@@ -3,7 +3,7 @@ package memory
 import (
 	"time"
 
-	"github.com/junghwan16/my/internal/source"
+	"github.com/junghwan16/gieok/internal/source"
 )
 
 // SourceRef is the Source context carried alongside a recalled Memory: enough to

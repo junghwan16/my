@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/junghwan16/my/internal/memory"
-	"github.com/junghwan16/my/internal/migrate"
-	"github.com/junghwan16/my/internal/source"
-	"github.com/junghwan16/my/internal/storage"
+	"github.com/junghwan16/gieok/internal/memory"
+	"github.com/junghwan16/gieok/internal/migrate"
+	"github.com/junghwan16/gieok/internal/source"
+	"github.com/junghwan16/gieok/internal/storage"
 )
 
 // fakeEmbedder returns deterministic vectors keyed by exact text, so tests

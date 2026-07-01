@@ -5,8 +5,8 @@
 // Memory carries the Source context it derives from.
 //
 // The tools reuse the shared recall seams on memory.Recaller (Recollect, Stats,
-// Get), the same ones the `my memory recall` CLI uses, so every surface returns
-// the same shape.
+// Get), the same ones the `gieok memory recall` CLI uses, so every surface
+// returns the same shape.
 package mcp
 
 import (
@@ -17,12 +17,12 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/junghwan16/my/internal/memory"
+	"github.com/junghwan16/gieok/internal/memory"
 )
 
 // serverName and serverVersion identify this MCP server to clients.
 const (
-	serverName    = "my-memory"
+	serverName    = "gieok-memory"
 	serverVersion = "0.1.0"
 )
 

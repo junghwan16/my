@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/junghwan16/my/internal/memory"
-	"github.com/junghwan16/my/internal/migrate"
-	"github.com/junghwan16/my/internal/source"
-	"github.com/junghwan16/my/internal/storage"
+	"github.com/junghwan16/gieok/internal/memory"
+	"github.com/junghwan16/gieok/internal/migrate"
+	"github.com/junghwan16/gieok/internal/source"
+	"github.com/junghwan16/gieok/internal/storage"
 )
 
 func TestMemoryImportFromDirectoryRecordsSessions(t *testing.T) {
@@ -64,7 +64,7 @@ func TestMemoryImportUsesDefaultStore(t *testing.T) {
 	t.Setenv("HOME", dir)
 	sessionsDir := filepath.Join(dir, "sessions")
 	sessionPath := filepath.Join(sessionsDir, "rollout.jsonl")
-	dbPath := filepath.Join(dir, ".local", "share", "my", "memory", "my.db")
+	dbPath := filepath.Join(dir, ".local", "share", "gieok", "memory", "gieok.db")
 	now := time.Date(2026, 7, 1, 11, 0, 0, 0, time.UTC)
 
 	writeFile(t, sessionPath, `{"timestamp":"2026-06-30T01:39:24.928Z","type":"session_meta","payload":{"id":"session-1","session_id":"session-1","timestamp":"2026-06-30T01:38:24.005Z","cwd":"/work/project"}}`)

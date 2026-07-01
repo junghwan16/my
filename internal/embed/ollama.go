@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/junghwan16/my/internal/memory"
+	"github.com/junghwan16/gieok/internal/memory"
 )
 
 // Ollama satisfies the memory.Embedder seam.

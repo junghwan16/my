@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/junghwan16/my/internal/memory"
+	"github.com/junghwan16/gieok/internal/memory"
 )
 
 func TestStatsCountsMemoriesAndIndexRows(t *testing.T) {

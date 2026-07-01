@@ -5,7 +5,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/junghwan16/my/internal/jsonutil"
+	"github.com/junghwan16/gieok/internal/jsonutil"
 )
 
 // These row models map onto the sources and source_events tables. The schema

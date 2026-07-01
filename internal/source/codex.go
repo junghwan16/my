@@ -8,7 +8,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/junghwan16/my/internal/jsonutil"
+	"github.com/junghwan16/gieok/internal/jsonutil"
 )
 
 /*

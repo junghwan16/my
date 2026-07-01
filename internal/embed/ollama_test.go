@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/junghwan16/my/internal/embed"
+	"github.com/junghwan16/gieok/internal/embed"
 )
 
 // TestEmbedParsesOllamaResponse drives the adapter against a fake HTTP server

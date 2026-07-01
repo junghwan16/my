@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/junghwan16/my/internal/source"
+	"github.com/junghwan16/gieok/internal/source"
 )
 
 // MemoryReader loads recorded memories and searches them. *Store satisfies it.

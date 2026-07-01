@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/junghwan16/my/internal/memory"
-	"github.com/junghwan16/my/internal/migrate"
-	"github.com/junghwan16/my/internal/source"
-	"github.com/junghwan16/my/internal/storage"
-	"github.com/junghwan16/my/internal/tokenize"
+	"github.com/junghwan16/gieok/internal/memory"
+	"github.com/junghwan16/gieok/internal/migrate"
+	"github.com/junghwan16/gieok/internal/source"
+	"github.com/junghwan16/gieok/internal/storage"
+	"github.com/junghwan16/gieok/internal/tokenize"
 )
 
 func TestMemoryRecallReturnsRelevantMemoryInScope(t *testing.T) {

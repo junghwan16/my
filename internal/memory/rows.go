@@ -5,7 +5,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/junghwan16/my/internal/source"
+	"github.com/junghwan16/gieok/internal/source"
 )
 
 // These row models map onto the memories and memory_links tables. The schema

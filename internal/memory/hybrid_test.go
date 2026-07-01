@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/junghwan16/my/internal/memory"
+	"github.com/junghwan16/gieok/internal/memory"
 )
 
 // indexOf returns the position of memID in the recollection list, or -1.

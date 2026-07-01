@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/junghwan16/my/internal/memory"
-	"github.com/junghwan16/my/internal/migrate"
-	"github.com/junghwan16/my/internal/source"
-	"github.com/junghwan16/my/internal/storage"
+	"github.com/junghwan16/gieok/internal/memory"
+	"github.com/junghwan16/gieok/internal/migrate"
+	"github.com/junghwan16/gieok/internal/source"
+	"github.com/junghwan16/gieok/internal/storage"
 )
 
 // TestIngestReflectsLateSessionContent is the #7 regression: a keyword that
@@ -324,6 +324,133 @@ func TestIngestSkipExistingSkipsAlreadyIngestedAgents(t *testing.T) {
 	if len(recalled) != 1 || recalled[0].Text != "v1" {
 		t.Fatalf("source memories = %#v, want single v1 memory", recalled)
 	}
+}
+
+// TestIngestPassesRelatedMemoryFromSameScopeExcludingOwnSource proves ingest
+// recalls existing memory before handing a source to an agent, so the agent
+// can connect the new source to what is already known instead of treating it
+// as a blank slate — and that a source's own prior memory (a re-ingest) does
+// not count as "existing" knowledge about itself.
+func TestIngestPassesRelatedMemoryFromSameScopeExcludingOwnSource(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sources, memories, closeStores := openStores(ctx, t, filepath.Join(dir, "memory.db"))
+	defer closeStores()
+
+	const sharedKeyword = "zzsharedtopic"
+	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
+
+	seedSrc := scopedSource("codex_session:seed", "/work/project")
+	if err := sources.RecordSource(ctx, seedSrc, []source.SourceEvent{{
+		SourceID:    seedSrc.ID,
+		Index:       0,
+		Line:        1,
+		Type:        "response_item",
+		Role:        "user",
+		Text:        sharedKeyword,
+		PayloadJSON: json.RawMessage(`{}`),
+		RawJSON:     json.RawMessage(`{}`),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.NewIngester(
+		sources, memories, []memory.Agent{staticAgent{name: "seed", text: "seed memory about " + sharedKeyword}}, nil,
+	).Ingest(ctx, memory.IngestOptions{SourceIDs: []source.SourceID{seedSrc.ID}}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// A different scope also mentions the keyword; it must not surface as
+	// related for a source ingested under /work/project.
+	otherScopeSrc := scopedSource("codex_session:other-scope", "/work/other")
+	if err := sources.RecordSource(ctx, otherScopeSrc, []source.SourceEvent{{
+		SourceID:    otherScopeSrc.ID,
+		Index:       0,
+		Line:        1,
+		Type:        "response_item",
+		Role:        "user",
+		Text:        sharedKeyword + " in a different project",
+		PayloadJSON: json.RawMessage(`{}`),
+		RawJSON:     json.RawMessage(`{}`),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.NewIngester(
+		sources, memories, []memory.Agent{staticAgent{name: "seed", text: "unrelated other-scope memory about " + sharedKeyword}}, nil,
+	).Ingest(ctx, memory.IngestOptions{SourceIDs: []source.SourceID{otherScopeSrc.ID}}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	newSrc := scopedSource("codex_session:new", "/work/project")
+	if err := sources.RecordSource(ctx, newSrc, []source.SourceEvent{{
+		SourceID:    newSrc.ID,
+		Index:       0,
+		Line:        1,
+		Type:        "response_item",
+		Role:        "user",
+		Text:        sharedKeyword,
+		PayloadJSON: json.RawMessage(`{}`),
+		RawJSON:     json.RawMessage(`{}`),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	captured := make(chan memory.AgentInput, 1)
+	if _, err := memory.NewIngester(
+		sources, memories, []memory.Agent{capturingAgent{name: "cap", inputs: captured}}, nil,
+	).Ingest(ctx, memory.IngestOptions{SourceIDs: []source.SourceID{newSrc.ID}}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	var input memory.AgentInput
+	select {
+	case input = <-captured:
+	default:
+		t.Fatal("capturing agent was not run")
+	}
+
+	if len(input.RelatedMemories) != 1 {
+		t.Fatalf("related memories = %#v, want exactly the same-scope seed memory", input.RelatedMemories)
+	}
+	if !strings.Contains(input.RelatedMemories[0].Text, "seed memory about "+sharedKeyword) {
+		t.Fatalf("related memory text = %q, want the same-scope seed memory", input.RelatedMemories[0].Text)
+	}
+
+	// Re-ingesting the seed source with a second agent must not see its own
+	// prior memory reflected back as "related" — that would just be a self-echo.
+	captured2 := make(chan memory.AgentInput, 1)
+	if _, err := memory.NewIngester(
+		sources, memories, []memory.Agent{capturingAgent{name: "cap2", inputs: captured2}}, nil,
+	).Ingest(ctx, memory.IngestOptions{SourceIDs: []source.SourceID{seedSrc.ID}}, now); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case input = <-captured2:
+	default:
+		t.Fatal("second capturing agent was not run")
+	}
+	for _, related := range input.RelatedMemories {
+		if strings.Contains(related.Text, "seed memory about "+sharedKeyword) {
+			t.Fatalf("related memories = %#v, must not include the source's own prior memory", input.RelatedMemories)
+		}
+	}
+}
+
+// capturingAgent records the AgentInput it receives so a test can assert on
+// what ingest computed (such as RelatedMemories) rather than on agent output.
+type capturingAgent struct {
+	name   string
+	inputs chan<- memory.AgentInput
+}
+
+func (a capturingAgent) Name() string {
+	return a.name
+}
+
+func (a capturingAgent) Ingest(_ context.Context, input memory.AgentInput) (memory.AgentOutput, error) {
+	a.inputs <- input
+	return memory.AgentOutput{
+		Memories: []memory.AgentMemory{{Kind: memory.MemoryKindSummary, Text: a.name + " summary"}},
+	}, nil
 }
 
 func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, *memory.Store, func()) {

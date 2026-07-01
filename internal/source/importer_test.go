@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/junghwan16/my/internal/migrate"
-	"github.com/junghwan16/my/internal/source"
-	"github.com/junghwan16/my/internal/storage"
+	"github.com/junghwan16/gieok/internal/migrate"
+	"github.com/junghwan16/gieok/internal/source"
+	"github.com/junghwan16/gieok/internal/storage"
 )
 
 func TestImporterReadCodexSessionMakesSourceRecallable(t *testing.T) {
