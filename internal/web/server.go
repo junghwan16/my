@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	memoriespkg "github.com/junghwan16/gieok/internal/memory"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 )
 
 // assets holds the static search page served at /. It is embedded so the binary
@@ -26,10 +27,13 @@ import (
 var assets embed.FS
 
 // recaller finds relevant Memory within a Scope for a task, attaching the Source
-// context each Memory derives from. *memories.Recaller satisfies it, so the HTTP
-// handler reuses the shared recall path rather than re-implementing ranking.
+// context each Memory derives from, and lists the Scopes the store holds so the
+// search page can offer a scope selector. *memories.Recaller satisfies it, so the
+// HTTP handlers reuse the shared recall path and read-model rather than
+// re-implementing ranking or querying the database directly.
 type recaller interface {
 	Recall(ctx context.Context, task, scope string, limit int) ([]memoriespkg.RecallResult, error)
+	Scopes(ctx context.Context) ([]sourcespkg.Scope, error)
 }
 
 // compile-time check that *memories.Recaller satisfies the consumed interface.
@@ -59,8 +63,9 @@ func (s *Server) Handler() http.Handler {
 	return s.handler
 }
 
-// routes builds the request multiplexer: the static search page at / and the
-// recall JSON API at /api/recall.
+// routes builds the request multiplexer: the static search page at /, the recall
+// JSON API at /api/recall, and the scope list at /api/scopes that backs the
+// search page's scope selector.
 func (s *Server) routes() http.Handler {
 	static, err := fs.Sub(assets, "static")
 	if err != nil {
@@ -72,6 +77,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(static)))
 	mux.HandleFunc("/api/recall", s.handleRecall)
+	mux.HandleFunc("/api/scopes", s.handleScopes)
 	return mux
 }
 
@@ -115,6 +121,51 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(recallResponse{Memories: results}); err != nil {
 		// The response is already partially written, so we can only log-shaped
 		// signal by writing nothing further; the client sees a truncated body.
+		return
+	}
+}
+
+// scopesResponse is the /api/scopes JSON body. It wraps the distinct Scopes the
+// store holds under a "scopes" key, each with its kind and value, so the search
+// page can populate a scope selector. The all-scopes option is the empty scope,
+// which the UI adds itself rather than the store returning it.
+type scopesResponse struct {
+	Scopes []scopeDTO `json:"scopes"`
+}
+
+// scopeDTO is one Scope in the /api/scopes response. Its value is exactly the
+// string /api/recall filters on when passed as the scope parameter.
+type scopeDTO struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+// handleScopes serves the distinct Scopes the store holds, so the search page can
+// offer a scope selector. It reads the shared read-model (never the recall path)
+// and writes them as JSON. The all-scopes choice is not in the list — it is the
+// empty scope, which the UI offers itself and passes back as an empty scope
+// parameter.
+func (s *Server) handleScopes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	scopes, err := s.recaller.Scopes(r.Context())
+	if err != nil {
+		http.Error(w, "load scopes failed", http.StatusInternalServerError)
+		return
+	}
+
+	dtos := make([]scopeDTO, 0, len(scopes))
+	for _, scope := range scopes {
+		dtos = append(dtos, scopeDTO{Kind: string(scope.Kind), Value: scope.Value})
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(scopesResponse{Scopes: dtos}); err != nil {
+		// The response is already partially written, so we can only stop; the
+		// client sees a truncated body.
 		return
 	}
 }

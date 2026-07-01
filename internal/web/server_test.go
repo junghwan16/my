@@ -163,6 +163,55 @@ func TestRecallRejectsBadLimit(t *testing.T) {
 	}
 }
 
+// scopesBody mirrors the /api/scopes JSON contract: a "scopes" array of the
+// distinct Scopes the store holds, each with its kind and value.
+type scopesBody struct {
+	Scopes []struct {
+		Kind  string `json:"kind"`
+		Value string `json:"value"`
+	} `json:"scopes"`
+}
+
+func TestScopesReturnsDistinctStoreScopes(t *testing.T) {
+	ctx := context.Background()
+	sources, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
+	defer closeStores()
+
+	// Two sources share /work/a (must dedupe) and one is in /work/b.
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a1", "/work/a"), "memory:a1", "종목 분석")
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a2", "/work/a"), "memory:a2", "종목 리포트")
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/b"), "memory:b", "종목 추천")
+
+	server := httptest.NewServer(web.NewServer(memoriespkg.NewRecaller(memories), "").Handler())
+	defer server.Close()
+
+	body := getScopes(ctx, t, server.URL+"/api/scopes")
+
+	if len(body.Scopes) != 2 {
+		t.Fatalf("scopes = %d (%#v), want 2 distinct", len(body.Scopes), body.Scopes)
+	}
+	if body.Scopes[0].Value != "/work/a" || body.Scopes[1].Value != "/work/b" {
+		t.Fatalf("scope values = %q, %q; want /work/a, /work/b (sorted, deduped)", body.Scopes[0].Value, body.Scopes[1].Value)
+	}
+	if body.Scopes[0].Kind != string(sourcespkg.ScopeKindWorkspace) {
+		t.Fatalf("scope kind = %q, want workspace", body.Scopes[0].Kind)
+	}
+}
+
+func TestScopesEmptyWhenStoreEmpty(t *testing.T) {
+	ctx := context.Background()
+	_, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
+	defer closeStores()
+
+	server := httptest.NewServer(web.NewServer(memoriespkg.NewRecaller(memories), "").Handler())
+	defer server.Close()
+
+	body := getScopes(ctx, t, server.URL+"/api/scopes")
+	if len(body.Scopes) != 0 {
+		t.Fatalf("scopes = %d, want 0 for an empty store", len(body.Scopes))
+	}
+}
+
 func TestServesSearchPage(t *testing.T) {
 	ctx := context.Background()
 	_, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
@@ -211,6 +260,29 @@ func getRecall(ctx context.Context, t *testing.T, url string) recallBody {
 	var body recallBody
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode recall response: %v", err)
+	}
+	return body
+}
+
+// getScopes fetches /api/scopes at url and decodes the JSON contract. It fails
+// the test on any transport, status, or decode error.
+func getScopes(ctx context.Context, t *testing.T, url string) scopesBody {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeResp(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", url, resp.StatusCode)
+	}
+	var body scopesBody
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode scopes response: %v", err)
 	}
 	return body
 }

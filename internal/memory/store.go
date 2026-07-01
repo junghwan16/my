@@ -277,6 +277,35 @@ func (s *Store) upsertRelations(ctx context.Context, tx *sql.Tx, relations []Rel
 	return nil
 }
 
+// Scopes lists the distinct Scopes any Source lives in, ordered by kind then
+// value for stable output. It is a read-model query for the web scope selector:
+// the values it returns are exactly the scope_value strings the recall path
+// filters on, so the UI can offer each as a filter and add an all-scopes option
+// (the empty scope). It reads the sources table directly and never touches the
+// recall path.
+func (s *Store) Scopes(ctx context.Context) ([]sourcespkg.Scope, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT scope_kind, scope_value
+		FROM sources
+		ORDER BY scope_kind, scope_value`)
+	if err != nil {
+		return nil, fmt.Errorf("load scopes: %w", err)
+	}
+	defer closeRows(rows)
+
+	scopes := []sourcespkg.Scope{}
+	for rows.Next() {
+		var scope sourcespkg.Scope
+		if err := rows.Scan(&scope.Kind, &scope.Value); err != nil {
+			return nil, fmt.Errorf("scan scope: %w", err)
+		}
+		scopes = append(scopes, scope)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate scopes: %w", err)
+	}
+	return scopes, nil
+}
+
 // MemoryRelations lists the relations starting from a memory (its outgoing
 // Memory->Memory links), ordered for stable output.
 func (s *Store) MemoryRelations(ctx context.Context, from MemoryID) ([]Relation, error) {

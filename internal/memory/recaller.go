@@ -17,6 +17,7 @@ type MemoryReader interface {
 	HybridRecallResults(ctx context.Context, query, scope string, limit int) ([]RecallResult, error)
 	RecentRecallResults(ctx context.Context, scope string, limit int) ([]RecallResult, error)
 	RecallResultByID(ctx context.Context, id MemoryID) (RecallResult, bool, error)
+	Scopes(ctx context.Context) ([]sourcespkg.Scope, error)
 	Stats(ctx context.Context) (Stats, error)
 }
 
@@ -79,6 +80,14 @@ func (r *Recaller) Recall(ctx context.Context, task, scope string, limit int) ([
 // render a clean "not found" rather than surfacing an error.
 func (r *Recaller) Get(ctx context.Context, id MemoryID) (RecallResult, bool, error) {
 	return r.store.RecallResultByID(ctx, id)
+}
+
+// Scopes lists the distinct Scopes any Source lives in, ordered for stable
+// output. It backs the web scope selector: each value is one the recall path
+// filters on, and the empty scope (all-scopes) is left for the surface to add.
+// It delegates to the store and never touches the recall path.
+func (r *Recaller) Scopes(ctx context.Context) ([]sourcespkg.Scope, error) {
+	return r.store.Scopes(ctx)
 }
 
 // Stats reports recall index health (memory, vector, and full-text index
