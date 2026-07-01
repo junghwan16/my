@@ -183,7 +183,8 @@ func writeRelatedMemories(b *strings.Builder, related []RecallResult) {
 		return
 	}
 
-	b.WriteString("Existing related memory (already known; connect this source to it, don't repeat it):\n")
+	b.WriteString("Existing related memory (already known; connect this source to it, don't repeat it). " +
+		"Each line starts with the memory id in brackets:\n")
 	for _, recallResult := range related {
 		if b.Len() >= maxRelatedMemoryBytes {
 			break
@@ -192,7 +193,9 @@ func writeRelatedMemories(b *strings.Builder, related []RecallResult) {
 		fmt.Fprintf(b, "- [%s] (%s, %s) %s\n", recallResult.MemoryID, recallResult.Agent, recallResult.Kind, text)
 	}
 	b.WriteString("Confirm, extend, update, or contradict the above where this source bears on it; " +
-		"otherwise call out only what is genuinely new.\n\n")
+		"otherwise call out only what is genuinely new.\n")
+	b.WriteString("When a new memory continues one of the existing memories above, name that memory's id " +
+		"in its `relates_to` array (a JSON list of the bracketed ids). Only ids listed above are allowed.\n\n")
 }
 
 // relatedMemoryQuery builds the recall query text for a source before it is

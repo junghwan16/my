@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>gieok · 기억 떠올리기</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.5;
+      background: #fafafa;
+      color: #1a1a1a;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #16181d; color: #e8e8e8; }
+      .card { background: #1f232b; border-color: #2c313b; }
+      input { background: #1f232b; color: #e8e8e8; border-color: #2c313b; }
+      .meta { color: #9aa2b1; }
+      .source { color: #8a93a3; }
+    }
+    header { max-width: 760px; margin: 0 auto; padding: 32px 20px 8px; }
+    h1 { margin: 0 0 4px; font-size: 20px; }
+    .tagline { margin: 0; color: #6b7280; font-size: 14px; }
+    main { max-width: 760px; margin: 0 auto; padding: 12px 20px 48px; }
+    form { display: flex; gap: 8px; margin: 16px 0 8px; }
+    input {
+      flex: 1; padding: 10px 12px; font-size: 15px;
+      border: 1px solid #d1d5db; border-radius: 8px; background: #fff;
+    }
+    select {
+      padding: 10px 12px; font-size: 15px; max-width: 100%;
+      border: 1px solid #d1d5db; border-radius: 8px; background: #fff; color: inherit;
+    }
+    .scope-row { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; }
+    .scope-row label { font-size: 13px; color: #6b7280; white-space: nowrap; }
+    @media (prefers-color-scheme: dark) {
+      select { background: #1f232b; color: #e8e8e8; border-color: #2c313b; }
+    }
+    button {
+      padding: 10px 16px; font-size: 15px; border: 0; border-radius: 8px;
+      background: #2563eb; color: #fff; cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    #status { min-height: 20px; margin: 4px 0 12px; font-size: 13px; color: #6b7280; }
+    ol { list-style: none; margin: 0; padding: 0; }
+    .card {
+      background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+      padding: 14px 16px; margin-bottom: 12px;
+    }
+    .meta { font-size: 12px; color: #6b7280; margin-bottom: 6px; }
+    .text { white-space: pre-wrap; word-break: break-word; }
+    .source { font-size: 12px; color: #6b7280; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>gieok</h1>
+    <p class="tagline">기억을 떠올립니다 · 질의를 비우면 최근 기억을 보여줍니다 · <a href="/graph">provenance 그래프 →</a></p>
+  </header>
+  <main>
+    <form id="search">
+      <input id="query" name="query" type="text" placeholder="무엇을 떠올릴까요?" autocomplete="off" autofocus />
+      <button type="submit">떠올리기</button>
+    </form>
+    <div class="scope-row">
+      <label for="scope">범위</label>
+      <select id="scope" name="scope">
+        <option value="">모든 범위</option>
+      </select>
+    </div>
+    <div id="status" role="status"></div>
+    <ol id="results"></ol>
+  </main>
+
+  <script>
+    const form = document.getElementById("search");
+    const queryInput = document.getElementById("query");
+    const scopeSelect = document.getElementById("scope");
+    const statusEl = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
+
+    function escapeHtml(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function renderResults(memories) {
+      resultsEl.innerHTML = "";
+      for (const mem of memories) {
+        const li = document.createElement("li");
+        li.className = "card";
+        const sources = (mem.sources || [])
+          .map((s) => `from ${escapeHtml(s.id)} · scope=${escapeHtml(s.scope && s.scope.value)}`)
+          .join("<br />");
+        li.innerHTML =
+          `<div class="meta">${escapeHtml(mem.memory_id)} · ${escapeHtml(mem.agent)}/${escapeHtml(mem.kind)} · ${escapeHtml(mem.created_at)}</div>` +
+          `<div class="text">${escapeHtml(mem.text)}</div>` +
+          (sources ? `<div class="source">${sources}</div>` : "");
+        resultsEl.appendChild(li);
+      }
+    }
+
+    // loadScopes populates the scope selector from /api/scopes. The all-scopes
+    // option (empty value) is already in the markup, so this only appends one
+    // option per distinct Scope the store holds. A load failure leaves the
+    // all-scopes option, so search still works.
+    async function loadScopes() {
+      try {
+        const res = await fetch("/api/scopes");
+        if (!res.ok) return;
+        const data = await res.json();
+        for (const scope of data.scopes || []) {
+          const option = document.createElement("option");
+          option.value = scope.value;
+          option.textContent = scope.value;
+          scopeSelect.appendChild(option);
+        }
+      } catch (err) {
+        // Keep the all-scopes option; a missing scope list must not break search.
+      }
+    }
+
+    async function recall(query) {
+      statusEl.textContent = "떠올리는 중…";
+      try {
+        // Always send scope explicitly: an empty value is the all-scopes choice,
+        // a non-empty value filters recall to that Scope.
+        const scope = scopeSelect.value;
+        const res = await fetch(
+          `/api/recall?query=${encodeURIComponent(query)}&scope=${encodeURIComponent(scope)}`
+        );
+        if (!res.ok) {
+          statusEl.textContent = `요청 실패 (${res.status})`;
+          return;
+        }
+        const data = await res.json();
+        const memories = data.memories || [];
+        renderResults(memories);
+        if (memories.length === 0) {
+          statusEl.textContent = query ? "떠오른 기억이 없습니다." : "아직 저장된 기억이 없습니다.";
+        } else {
+          statusEl.textContent = query
+            ? `${memories.length}개의 기억을 떠올렸습니다.`
+            : `최근 기억 ${memories.length}개`;
+        }
+      } catch (err) {
+        statusEl.textContent = "요청 중 오류가 발생했습니다.";
+      }
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      recall(queryInput.value.trim());
+    });
+
+    // Changing the scope re-runs the current query filtered to the new Scope.
+    scopeSelect.addEventListener("change", () => {
+      recall(queryInput.value.trim());
+    });
+
+    // Load the scope selector, then show recent Memory (empty query) so the page
+    // is useful immediately across every Scope.
+    loadScopes().then(() => recall(""));
+  </script>
+</body>
+</html>

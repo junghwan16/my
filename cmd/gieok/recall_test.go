@@ -297,7 +297,7 @@ func seedMemoryAt(ctx context.Context, t *testing.T, dbPath string, srcID source
 		CreatedAt:    at,
 		MetadataJSON: json.RawMessage(`{}`),
 	}
-	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{mem}, []memoriespkg.Link{link}); err != nil {
+	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{mem}, []memoriespkg.Link{link}, nil); err != nil {
 		t.Fatal(err)
 	}
 }
