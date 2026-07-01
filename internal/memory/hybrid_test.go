@@ -118,7 +118,7 @@ func TestHybridDeterministicOnEqualScores(t *testing.T) {
 	emb := fakeEmbedder{vectors: map[string][]float32{
 		"beta one": {1, 0, 0},
 		"beta two": {1, 0, 0}, // identical vector => identical semantic rank basis
-		"query":    {1, 0, 0},
+		"beta":     {1, 0, 0}, // query embeds identically => cosine 1, tie above the floor
 	}}
 	sources, memories, closeStores := openSemanticStores(ctx, t, emb)
 	defer closeStores()
@@ -131,7 +131,7 @@ func TestHybridDeterministicOnEqualScores(t *testing.T) {
 
 	var first []memory.Recollection
 	for i := range 5 {
-		got, err := recaller.Recollect(ctx, "beta query", "", 10)
+		got, err := recaller.Recollect(ctx, "beta", "", 10)
 		if err != nil {
 			t.Fatal(err)
 		}
