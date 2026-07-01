@@ -3,6 +3,8 @@ package memory_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +15,74 @@ import (
 	"github.com/junghwan16/my/internal/source"
 	"github.com/junghwan16/my/internal/storage"
 )
+
+// TestIngestReflectsLateSessionContent is the #7 regression: a keyword that
+// appears only late in a session (well past the old 40-event leading window)
+// must reach Memory and be recallable. The prompt-echoing agent surfaces the
+// bounded prompt as a single summary Memory, so if the late keyword is missing
+// from the prompt it is unrecallable — proving whether the sampler spans the
+// whole session.
+func TestIngestReflectsLateSessionContent(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sources, memories, closeStores := openStores(ctx, t, filepath.Join(dir, "memory.db"))
+	defer closeStores()
+
+	src := scopedSource("codex_session:long", "/work/long")
+
+	const lateKeyword = "zzlatekeyword"
+	const eventCount = 100
+	const lateIndex = eventCount - 1 // the final event, far past the old 40-event window
+	events := make([]source.SourceEvent, eventCount)
+	for i := range events {
+		text := fmt.Sprintf("event number %d filler discussion", i)
+		if i == lateIndex {
+			text = "we discussed " + lateKeyword + " near the end"
+		}
+		events[i] = source.SourceEvent{
+			SourceID:    src.ID,
+			Index:       i,
+			Line:        i + 1,
+			Type:        "response_item",
+			Role:        "user",
+			Text:        text,
+			PayloadJSON: json.RawMessage(`{}`),
+			RawJSON:     json.RawMessage(`{}`),
+		}
+	}
+	if err := sources.RecordSource(ctx, src, events); err != nil {
+		t.Fatal(err)
+	}
+
+	agent := promptEchoAgent(t, "echo")
+	if _, err := memory.NewIngester(sources, memories, []memory.Agent{agent}, nil).
+		Ingest(ctx, memory.IngestOptions{}, time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := memory.NewRecaller(memories).Search(ctx, lateKeyword, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("recall of late-session keyword %q = %d results, want 1", lateKeyword, len(got))
+	}
+	if !strings.Contains(got[0].Text, lateKeyword) {
+		t.Fatalf("recalled memory text %q missing late keyword %q", got[0].Text, lateKeyword)
+	}
+}
+
+// promptEchoAgent returns a CommandAgent whose command echoes the ingest prompt
+// it receives (the prompt is the last CLI argument), so the prompt's content
+// becomes a single summary Memory the test can recall against.
+func promptEchoAgent(t *testing.T, name string) memory.Agent {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name+".sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s' \"$1\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return memory.NewCommandAgent(name, path)
+}
 
 func TestIngestSourcesRunsAgentsInParallelAndLinksMemories(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

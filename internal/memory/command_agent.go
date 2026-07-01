@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/junghwan16/my/internal/source"
 )
 
 const (
@@ -142,10 +144,10 @@ func buildIngestPrompt(input AgentInput) string {
 	fmt.Fprintf(&b, "Source kind: %s\n", input.Source.Kind)
 	fmt.Fprintf(&b, "Source URI: %s\n", input.Source.URI)
 	fmt.Fprintf(&b, "Workspace: %s\n\n", input.Source.Scope.Value)
-	b.WriteString("Relevant events:\n")
+	b.WriteString("Relevant events (sampled across the whole session):\n")
 
-	for i, event := range input.Events {
-		if i >= maxPromptEvents || b.Len() >= maxPromptBytes {
+	for _, event := range sampleEvents(input.Events, maxPromptEvents) {
+		if b.Len() >= maxPromptBytes {
 			break
 		}
 		text := event.Text
@@ -156,6 +158,35 @@ func buildIngestPrompt(input AgentInput) string {
 	}
 
 	return truncateUTF8(b.String(), maxPromptBytes)
+}
+
+// sampleEvents selects at most maxEvents events spread evenly across the session,
+// from the first event to the last, preserving chronological order. Taking only
+// the leading events made memory reflect a session's opening alone; sampling by
+// an even stride makes one bounded prompt cover beginning, middle, and end so
+// late-session topics are still summarized (and thus recallable).
+func sampleEvents(events []source.SourceEvent, maxEvents int) []source.SourceEvent {
+	if maxEvents <= 0 || len(events) == 0 {
+		return nil
+	}
+	if len(events) <= maxEvents {
+		return events
+	}
+
+	sampled := make([]source.SourceEvent, 0, maxEvents)
+	last := len(events) - 1
+	prev := -1
+	for i := range maxEvents {
+		// Map slot i in [0, maxEvents-1] onto an index in [0, last] so the first
+		// and last events are always included and the rest are evenly strided.
+		idx := i * last / (maxEvents - 1)
+		if idx == prev {
+			continue
+		}
+		prev = idx
+		sampled = append(sampled, events[idx])
+	}
+	return sampled
 }
 
 // truncateUTF8 caps s at limit bytes without splitting a multi-byte rune.
