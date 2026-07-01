@@ -62,7 +62,6 @@ linters:
         - name: var-naming
         - name: var-declaration
         - name: package-comments
-          disabled: true
         - name: receiver-naming
         - name: time-naming
         - name: unexported-return

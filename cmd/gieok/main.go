@@ -1,3 +1,4 @@
+// Package main implements the gieok command-line interface.
 package main
 
 import (

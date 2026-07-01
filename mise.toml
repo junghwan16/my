@@ -1,3 +1,30 @@
 [tools]
 go = "1.25.10"
 golangci-lint = "2.12.2"
+
+[tasks.fmt]
+description = "Format Go files with gofmt."
+run = "gofmt -w $(git ls-files '*.go')"
+
+[tasks.verify]
+description = "Run the local Go presubmit checks."
+run = '''
+set -eu
+
+files="$(gofmt -l $(git ls-files '*.go'))"
+if [ -n "$files" ]; then
+  printf 'gofmt needed:\n%s\n' "$files"
+  exit 1
+fi
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+cp go.mod go.sum "$tmp"/
+go mod tidy
+diff -u "$tmp/go.mod" go.mod
+diff -u "$tmp/go.sum" go.sum
+
+golangci-lint run
+go test ./...
+git diff --check
+'''

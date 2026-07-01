@@ -1,3 +1,5 @@
+// Package memories models reusable knowledge extracted from saved Sources and
+// provides ingest, recall, full-text, and semantic indexing behavior.
 package memories
 
 import (

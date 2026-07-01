@@ -1,3 +1,4 @@
+// Package storage owns local database connection setup for gieok.
 package storage
 
 import (

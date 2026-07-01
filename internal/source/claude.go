@@ -1,3 +1,5 @@
+// Package sources imports raw agent session files into normalized local Source
+// records that Memory ingest can consume later.
 package sources
 
 import (

@@ -1,6 +1,6 @@
 module github.com/junghwan16/gieok
 
-go 1.25.7
+go 1.25.10
 
 require (
 	github.com/glebarez/go-sqlite v1.21.2

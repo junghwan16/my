@@ -18,6 +18,19 @@
 - **Scope (범위)**: 기억이 적용되는 작업공간입니다. 기본값은 현재 디렉터리입니다.
 - **Recall (떠올리기)**: Scope 안에서 지금 작업에 맞는 Memory를 찾는 동작입니다.
 
+## 개발 검증
+
+프로젝트 툴 버전은 `mise.toml`에 고정합니다.
+
+```sh
+mise install
+mise run verify
+```
+
+`verify`는 CI와 같은 기준으로 `gofmt`, `go mod tidy`, `golangci-lint run`,
+`go test ./...`, `git diff --check`를 실행합니다. Go 파일만 빠르게 정리하려면
+`mise run fmt`를 씁니다.
+
 ## 현재 구현된 기능
 
 - **`gieok memory import --from <path> --store <db>`**
