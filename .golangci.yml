@@ -58,6 +58,10 @@ linters:
         - name: error-strings
         - name: error-naming
         - name: exported
+          arguments:
+            # Domain types intentionally mirror the ubiquitous language (e.g.
+            # memory.Memory, memory.MemoryID). See docs/design-docs/0001-memory-naming.md.
+            - disableStutteringCheck
         - name: increment-decrement
         - name: var-naming
         - name: var-declaration

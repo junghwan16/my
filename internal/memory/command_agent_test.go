@@ -2,57 +2,58 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestParseAgentItemsPlainTextIsSingleSummary(t *testing.T) {
-	items := parseAgentItems("just a prose summary")
-	if len(items) != 1 {
-		t.Fatalf("items length = %d, want 1", len(items))
+func TestParseAgentMemoriesPlainTextIsSingleSummary(t *testing.T) {
+	memories := parseAgentMemories("just a prose summary")
+	if len(memories) != 1 {
+		t.Fatalf("memories length = %d, want 1", len(memories))
 	}
-	if items[0].Kind != ItemKindSummary {
-		t.Fatalf("item kind = %q, want %q", items[0].Kind, ItemKindSummary)
+	if memories[0].Kind != MemoryKindSummary {
+		t.Fatalf("memory kind = %q, want %q", memories[0].Kind, MemoryKindSummary)
 	}
-	if items[0].Text != "just a prose summary" {
-		t.Fatalf("item text = %q", items[0].Text)
+	if memories[0].Text != "just a prose summary" {
+		t.Fatalf("memory text = %q", memories[0].Text)
 	}
 }
 
-func TestParseAgentItemsJSONArrayProducesMultipleItems(t *testing.T) {
-	items := parseAgentItems(`[
+func TestParseAgentMemoriesJSONArrayProducesMultiple(t *testing.T) {
+	memories := parseAgentMemories(`[
 		{"kind":"summary","text":"first","metadata_json":{"k":"v"}},
 		{"text":"second"},
 		{"text":"   "}
 	]`)
-	if len(items) != 2 {
-		t.Fatalf("items length = %d, want 2 (blank item dropped)", len(items))
+	if len(memories) != 2 {
+		t.Fatalf("memories length = %d, want 2 (blank memory dropped)", len(memories))
 	}
-	if items[0].Text != "first" || items[1].Text != "second" {
-		t.Fatalf("unexpected texts: %q, %q", items[0].Text, items[1].Text)
+	if memories[0].Text != "first" || memories[1].Text != "second" {
+		t.Fatalf("unexpected texts: %q, %q", memories[0].Text, memories[1].Text)
 	}
-	if items[1].Kind != ItemKindSummary {
-		t.Fatalf("defaulted kind = %q, want %q", items[1].Kind, ItemKindSummary)
+	if memories[1].Kind != MemoryKindSummary {
+		t.Fatalf("defaulted kind = %q, want %q", memories[1].Kind, MemoryKindSummary)
 	}
-	if string(items[0].MetadataJSON) != `{"k":"v"}` {
-		t.Fatalf("metadata = %s, want {\"k\":\"v\"}", items[0].MetadataJSON)
+	if string(memories[0].MetadataJSON) != `{"k":"v"}` {
+		t.Fatalf("metadata = %s, want {\"k\":\"v\"}", memories[0].MetadataJSON)
 	}
 }
 
-func TestParseAgentItemsMalformedJSONFallsBackToSummary(t *testing.T) {
+func TestParseAgentMemoriesMalformedJSONFallsBackToSummary(t *testing.T) {
 	text := `[not valid json`
-	items := parseAgentItems(text)
-	if len(items) != 1 || items[0].Text != text {
-		t.Fatalf("items = %#v, want single summary of raw text", items)
+	memories := parseAgentMemories(text)
+	if len(memories) != 1 || memories[0].Text != text {
+		t.Fatalf("memories = %#v, want single summary of raw text", memories)
 	}
 }
 
 func TestTruncateUTF8DoesNotSplitRunes(t *testing.T) {
 	// "가" is 3 bytes in UTF-8; capping mid-rune must back off to a boundary.
 	s := strings.Repeat("가", 5) // 15 bytes
-	got := truncateUTF8(s, 7)    // 7 bytes lands inside the third rune
+	got := truncateUTF8(s, 7)   // 7 bytes lands inside the third rune
 	if !isValidBoundary(got) {
 		t.Fatalf("truncated string is not valid UTF-8: %q", got)
 	}
@@ -70,22 +71,69 @@ func isValidBoundary(s string) bool {
 	return true
 }
 
-func TestCommandAgentIngestStoresStdoutNotStderr(t *testing.T) {
+// fakeRunner is an in-memory transport so Ingest's orchestration (prompt build,
+// runner wiring, output parsing, empty/error handling) can be exercised without
+// spawning a process.
+type fakeRunner struct {
+	stdout []byte
+	err    error
+	prompt string // captured for assertions
+}
+
+func (r *fakeRunner) Run(_ context.Context, prompt string) ([]byte, error) {
+	r.prompt = prompt
+	return r.stdout, r.err
+}
+
+func TestCommandAgentIngestParsesJSONArrayOutput(t *testing.T) {
+	agent := CommandAgent{name: "json", runner: &fakeRunner{stdout: []byte(`[{"text":"a"},{"text":"b"}]`)}}
+
+	out, err := agent.Ingest(context.Background(), AgentInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Memories) != 2 {
+		t.Fatalf("memories length = %d, want 2", len(out.Memories))
+	}
+}
+
+func TestCommandAgentIngestEmptyOutputProducesNoMemories(t *testing.T) {
+	agent := CommandAgent{name: "empty", runner: &fakeRunner{stdout: []byte("   \n")}}
+
+	out, err := agent.Ingest(context.Background(), AgentInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Memories) != 0 {
+		t.Fatalf("memories length = %d, want 0 for blank output", len(out.Memories))
+	}
+}
+
+func TestCommandAgentIngestPropagatesRunnerError(t *testing.T) {
+	agent := CommandAgent{name: "failer", runner: &fakeRunner{err: errors.New("transport boom")}}
+
+	_, err := agent.Ingest(context.Background(), AgentInput{})
+	if err == nil || !strings.Contains(err.Error(), "transport boom") {
+		t.Fatalf("error = %v, want it to propagate 'transport boom'", err)
+	}
+}
+
+func TestExecRunnerStoresStdoutNotStderr(t *testing.T) {
 	agent := newScriptAgent(t, "stdout-only", "printf 'real summary'; printf 'progress noise' 1>&2\n")
 
 	out, err := agent.Ingest(context.Background(), AgentInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Items) != 1 {
-		t.Fatalf("items length = %d, want 1", len(out.Items))
+	if len(out.Memories) != 1 {
+		t.Fatalf("memories length = %d, want 1", len(out.Memories))
 	}
-	if out.Items[0].Text != "real summary" {
-		t.Fatalf("item text = %q, want 'real summary' (stderr must be excluded)", out.Items[0].Text)
+	if out.Memories[0].Text != "real summary" {
+		t.Fatalf("memory text = %q, want 'real summary' (stderr must be excluded)", out.Memories[0].Text)
 	}
 }
 
-func TestCommandAgentIngestSurfacesStderrOnFailure(t *testing.T) {
+func TestExecRunnerSurfacesStderrOnFailure(t *testing.T) {
 	agent := newScriptAgent(t, "failer", "printf 'boom happened' 1>&2; exit 3\n")
 
 	_, err := agent.Ingest(context.Background(), AgentInput{})
@@ -94,18 +142,6 @@ func TestCommandAgentIngestSurfacesStderrOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "boom happened") {
 		t.Fatalf("error = %v, want it to contain stderr 'boom happened'", err)
-	}
-}
-
-func TestCommandAgentIngestParsesJSONArrayOutput(t *testing.T) {
-	agent := newScriptAgent(t, "json", `printf '[{"text":"a"},{"text":"b"}]'`+"\n")
-
-	out, err := agent.Ingest(context.Background(), AgentInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out.Items) != 2 {
-		t.Fatalf("items length = %d, want 2", len(out.Items))
 	}
 }
 

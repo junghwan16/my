@@ -1,14 +1,14 @@
-package memory
+package source
 
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/junghwan16/my/internal/jsonutil"
 )
 
 /*
@@ -28,39 +28,27 @@ SourceEvent.RawJSON is the full envelope line. Stable fields such as cwd,
 turn_id, role, and message text are copied into columns for recall.
 */
 
-func codexSource(uri string, raw []byte, recordedAt time.Time) (Source, []SourceEvent, error) {
-	if !looksLikeCodexSession(raw) {
-		return Source{}, nil, fmt.Errorf("%w: codex session", errUnsupportedSession)
-	}
+// codexFormat parses Codex session JSONL files.
+type codexFormat struct{}
 
+var _ SessionFormat = codexFormat{}
+
+func (codexFormat) Kind() SourceKind { return SourceKindCodexSession }
+
+func (codexFormat) Sniff(raw []byte) bool { return looksLikeCodexSession(raw) }
+
+func (codexFormat) Parse(raw []byte) (ParsedSession, error) {
 	events, meta, err := parseCodexEvents(bytes.NewReader(raw))
 	if err != nil {
-		return Source{}, nil, err
+		return ParsedSession{}, err
 	}
 
-	sum := sha256.Sum256(raw)
-	hash := hex.EncodeToString(sum[:])
-	source := Source{
-		ID:            SourceID("codex_session:" + hash),
-		Kind:          SourceKindCodexSession,
-		URI:           uri,
-		ContentSHA256: hash,
-		Scope: Scope{
-			Kind:  ScopeKindWorkspace,
-			Value: meta.CWD,
-		},
-		StartedAt:    meta.StartedAt,
-		EndedAt:      lastEventTime(events),
-		RecordedAt:   recordedAt,
-		MetadataJSON: mustMarshalJSON(meta),
-	}
-
-	for i := range events {
-		events[i].SourceID = source.ID
-		events[i].Index = i
-	}
-
-	return source, events, nil
+	return ParsedSession{
+		Events:    events,
+		Scope:     Scope{Kind: ScopeKindWorkspace, Value: meta.CWD},
+		StartedAt: meta.StartedAt,
+		Metadata:  jsonutil.MustMarshal(meta),
+	}, nil
 }
 
 func looksLikeCodexSession(raw []byte) bool {
@@ -185,10 +173,10 @@ func parseCodexLine(lineNumber int, line []byte) (SourceEvent, codexMeta, error)
 
 	event := SourceEvent{
 		Line:        lineNumber,
-		At:          parseCodexTime(envelope.Timestamp),
+		At:          parseTimestamp(envelope.Timestamp),
 		Type:        envelope.Type,
-		PayloadJSON: cloneJSON(envelope.Payload),
-		RawJSON:     cloneJSON(raw),
+		PayloadJSON: jsonutil.Clone(envelope.Payload),
+		RawJSON:     jsonutil.Clone(raw),
 	}
 
 	var meta codexMeta
@@ -204,7 +192,7 @@ func parseCodexLine(lineNumber int, line []byte) (SourceEvent, codexMeta, error)
 			Originator:    payload.Originator,
 			CLIVersion:    payload.CLIVersion,
 			ModelProvider: payload.ModelProvider,
-			StartedAt:     parseCodexTime(firstNonEmpty(payload.Timestamp, envelope.Timestamp)),
+			StartedAt:     parseTimestamp(firstNonEmpty(payload.Timestamp, envelope.Timestamp)),
 		}
 	case "turn_context":
 		var payload codexTurnContextPayload
@@ -239,44 +227,4 @@ func codexContentText(content []codexContentPart) string {
 		text += part.Text
 	}
 	return text
-}
-
-func parseCodexTime(value string) time.Time {
-	if value == "" {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-// mustMarshalJSON marshals values that are statically known to be encodable
-// (plain structs and string maps). A failure indicates a programming error, so
-// it panics rather than silently dropping data, mirroring regexp.MustCompile.
-func mustMarshalJSON(v any) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(fmt.Sprintf("marshal json: %v", err))
-	}
-	return b
-}
-
-func cloneJSON(raw []byte) json.RawMessage {
-	if len(raw) == 0 {
-		return nil
-	}
-	cloned := make([]byte, len(raw))
-	copy(cloned, raw)
-	return cloned
 }

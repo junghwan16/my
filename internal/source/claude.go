@@ -1,14 +1,14 @@
-package memory
+package source
 
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"time"
+
+	"github.com/junghwan16/my/internal/jsonutil"
 )
 
 /*
@@ -19,39 +19,27 @@ Each line is a top-level record with a "type" field. Message records commonly
 carry sessionId, cwd, timestamp, and message.role/message.content.
 */
 
-func claudeSource(uri string, raw []byte, recordedAt time.Time) (Source, []SourceEvent, error) {
-	if !looksLikeClaudeCodeSession(raw) {
-		return Source{}, nil, fmt.Errorf("%w: claude code session", errUnsupportedSession)
-	}
+// claudeFormat parses Claude Code session JSONL files.
+type claudeFormat struct{}
 
+var _ SessionFormat = claudeFormat{}
+
+func (claudeFormat) Kind() SourceKind { return SourceKindClaudeCodeSession }
+
+func (claudeFormat) Sniff(raw []byte) bool { return looksLikeClaudeCodeSession(raw) }
+
+func (claudeFormat) Parse(raw []byte) (ParsedSession, error) {
 	events, meta, err := parseClaudeCodeEvents(bytes.NewReader(raw))
 	if err != nil {
-		return Source{}, nil, err
+		return ParsedSession{}, err
 	}
 
-	sum := sha256.Sum256(raw)
-	hash := hex.EncodeToString(sum[:])
-	source := Source{
-		ID:            SourceID("claude_code_session:" + hash),
-		Kind:          SourceKindClaudeCodeSession,
-		URI:           uri,
-		ContentSHA256: hash,
-		Scope: Scope{
-			Kind:  ScopeKindWorkspace,
-			Value: meta.CWD,
-		},
-		StartedAt:    firstEventTime(events),
-		EndedAt:      lastEventTime(events),
-		RecordedAt:   recordedAt,
-		MetadataJSON: mustMarshalJSON(meta),
-	}
-
-	for i := range events {
-		events[i].SourceID = source.ID
-		events[i].Index = i
-	}
-
-	return source, events, nil
+	return ParsedSession{
+		Events:    events,
+		Scope:     Scope{Kind: ScopeKindWorkspace, Value: meta.CWD},
+		StartedAt: firstEventTime(events),
+		Metadata:  jsonutil.MustMarshal(meta),
+	}, nil
 }
 
 func looksLikeClaudeCodeSession(raw []byte) bool {
@@ -135,7 +123,7 @@ func parseClaudeCodeEvents(r io.Reader) ([]SourceEvent, claudeCodeMeta, error) {
 		return nil, claudeCodeMeta{}, fmt.Errorf("read claude code session: %w", err)
 	}
 	if len(events) == 0 {
-		return nil, claudeCodeMeta{}, fmt.Errorf("empty claude code session")
+		return nil, claudeCodeMeta{}, errors.New("empty claude code session")
 	}
 	return events, meta, nil
 }
@@ -156,12 +144,12 @@ func parseClaudeCodeLine(lineNumber int, line []byte) (SourceEvent, claudeCodeMe
 
 	return SourceEvent{
 			Line:        lineNumber,
-			At:          parseCodexTime(record.Timestamp),
+			At:          parseTimestamp(record.Timestamp),
 			Type:        record.Type,
 			Role:        record.Message.Role,
 			Text:        claudeCodeMessageText(record.Message.Content),
-			PayloadJSON: cloneJSON(raw),
-			RawJSON:     cloneJSON(raw),
+			PayloadJSON: jsonutil.Clone(raw),
+			RawJSON:     jsonutil.Clone(raw),
 		}, claudeCodeMeta{
 			SessionID: record.SessionID,
 			CWD:       record.CWD,

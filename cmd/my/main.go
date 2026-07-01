@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/junghwan16/my/internal/memory"
+	"github.com/junghwan16/my/internal/migrate"
+	"github.com/junghwan16/my/internal/source"
 	"github.com/junghwan16/my/internal/storage"
 )
 
@@ -38,9 +40,10 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	}
 }
 
-// withStore opens the SQLite store, migrates it, and hands a ready Store to fn,
-// guaranteeing the database is closed afterwards.
-func withStore(ctx context.Context, path string, fn func(*memory.Store) error) (err error) {
+// withStores opens the SQLite database, brings its schema up to date through the
+// migration ledger, and hands ready stores to fn, guaranteeing the database is
+// closed afterwards.
+func withStores(ctx context.Context, path string, fn func(*source.Store, *memory.Store) error) (err error) {
 	db, err := storage.OpenSQLite(path)
 	if err != nil {
 		return err
@@ -50,10 +53,10 @@ func withStore(ctx context.Context, path string, fn func(*memory.Store) error) (
 			err = fmt.Errorf("close sqlite database: %w", closeErr)
 		}
 	}()
-	if err = memory.Migrate(ctx, db); err != nil {
+	if err = migrate.Apply(ctx, db, path); err != nil {
 		return err
 	}
-	return fn(memory.NewStore(db))
+	return fn(source.NewStore(db), memory.NewStore(db))
 }
 
 func runMemoryImport(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, now time.Time) error {
@@ -62,9 +65,9 @@ func runMemoryImport(ctx context.Context, args []string, stdout io.Writer, stder
 		return err
 	}
 
-	return withStore(ctx, config.storePath, func(store *memory.Store) error {
+	return withStores(ctx, config.storePath, func(sources *source.Store, _ *memory.Store) error {
 		logger := slog.New(slog.NewTextHandler(stderr, nil))
-		result, err := memory.ImportSessions(ctx, store, config.from, now, logger)
+		result, err := source.NewImporter(sources, logger).Import(ctx, config.from, now)
 		if err != nil {
 			return err
 		}
@@ -87,18 +90,19 @@ func runMemoryIngest(ctx context.Context, args []string, stdout io.Writer, stder
 		return err
 	}
 
-	return withStore(ctx, config.storePath, func(store *memory.Store) error {
+	return withStores(ctx, config.storePath, func(sources *source.Store, memories *memory.Store) error {
 		logger := slog.New(slog.NewTextHandler(stderr, nil))
-		result, err := memory.IngestSourcesWithOptions(ctx, store, config.agents, config.options, now, logger)
+		ingester := memory.NewIngester(sources, memories, config.agents, logger)
+		result, err := ingester.Ingest(ctx, config.options, now)
 		if err != nil {
 			return err
 		}
 
 		if _, err := fmt.Fprintf(
 			stdout,
-			"ingested %d source(s), created %d item(s), failed %d agent run(s)\n",
+			"ingested %d source(s), created %d memories, failed %d agent run(s)\n",
 			result.Sources,
-			result.Items,
+			result.Memories,
 			result.Errors,
 		); err != nil {
 			return fmt.Errorf("write ingest summary: %w", err)
@@ -174,14 +178,14 @@ func parseMemoryIngestConfig(args []string, stderr io.Writer) (memoryIngestConfi
 	if len(agentSpecs) == 0 {
 		return memoryIngestConfig{
 			storePath: *storePath,
-			agents:    defaultIngestAgents(),
+			agents:    memory.DefaultAgents(),
 			options:   options,
 		}, nil
 	}
 
 	agents := make([]memory.Agent, 0, len(agentSpecs))
 	for _, spec := range agentSpecs {
-		agent, err := parseAgentSpec(spec)
+		agent, err := memory.ParseAgentSpec(spec)
 		if err != nil {
 			return memoryIngestConfig{}, err
 		}
@@ -204,28 +208,11 @@ func newIngestOptions(sourceIDs []string, limit int, concurrency int, skipExisti
 		return options
 	}
 
-	options.SourceIDs = make([]memory.SourceID, 0, len(sourceIDs))
+	options.SourceIDs = make([]source.SourceID, 0, len(sourceIDs))
 	for _, id := range sourceIDs {
-		options.SourceIDs = append(options.SourceIDs, memory.SourceID(id))
+		options.SourceIDs = append(options.SourceIDs, source.SourceID(id))
 	}
 	return options
-}
-
-func defaultIngestAgents() []memory.Agent {
-	return []memory.Agent{
-		memory.NewCommandAgent("claude", "claude", "-p", "--no-session-persistence", "--disallowedTools=Bash,Edit,Write"),
-		memory.NewCommandAgent(
-			"codex",
-			"codex",
-			"--ask-for-approval",
-			"never",
-			"exec",
-			"--sandbox",
-			"read-only",
-			"--skip-git-repo-check",
-		),
-		memory.NewCommandAgent("pi", "pi", "-p", "--no-tools", "--no-session"),
-	}
 }
 
 type repeatedFlag []string
@@ -237,21 +224,6 @@ func (f *repeatedFlag) String() string {
 func (f *repeatedFlag) Set(value string) error {
 	*f = append(*f, value)
 	return nil
-}
-
-func parseAgentSpec(spec string) (memory.CommandAgent, error) {
-	name, commandSpec, ok := strings.Cut(spec, "=")
-	if !ok || name == "" || commandSpec == "" {
-		return memory.CommandAgent{}, fmt.Errorf("invalid agent spec %q", spec)
-	}
-
-	parts := strings.Split(commandSpec, ",")
-	for _, part := range parts {
-		if part == "" {
-			return memory.CommandAgent{}, fmt.Errorf("invalid agent spec %q", spec)
-		}
-	}
-	return memory.NewCommandAgent(name, parts[0], parts[1:]...), nil
 }
 
 func defaultStorePath() (string, error) {

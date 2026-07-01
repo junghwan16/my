@@ -1,11 +1,11 @@
-package memory
+package source
 
 import (
 	"encoding/json"
 	"time"
 )
 
-// SourceID uniquely identifies an imported memory source.
+// SourceID uniquely identifies an imported source.
 type SourceID string
 
 // SourceKind describes the original session file format.
@@ -30,7 +30,8 @@ type Scope struct {
 	Value string    `json:"value"`
 }
 
-// Source stores file-level metadata for an imported session.
+// Source stores file-level metadata for an imported session. It is immutable
+// once recorded; corrections arrive as later Sources or as Memory.
 type Source struct {
 	ID            SourceID        `json:"id"`
 	Kind          SourceKind      `json:"kind"`
@@ -55,46 +56,4 @@ type SourceEvent struct {
 	Text        string          `json:"text,omitempty"`
 	PayloadJSON json.RawMessage `json:"payload_json"`
 	RawJSON     json.RawMessage `json:"raw_json"`
-}
-
-// ItemID uniquely identifies a generated memory item.
-type ItemID string
-
-// ItemKind describes the kind of memory an agent produced.
-type ItemKind string
-
-const (
-	// ItemKindSummary stores an agent-generated source summary.
-	ItemKindSummary ItemKind = "summary"
-)
-
-// LinkKind describes why two memory records are related.
-type LinkKind string
-
-const (
-	// LinkKindSourceIngest links a source to an item created while ingesting it.
-	LinkKindSourceIngest LinkKind = "source_ingest"
-)
-
-// Item is an agent-produced memory record.
-type Item struct {
-	ID           ItemID          `json:"id"`
-	Agent        string          `json:"agent"`
-	Kind         ItemKind        `json:"kind"`
-	Text         string          `json:"text"`
-	CreatedAt    time.Time       `json:"created_at"`
-	MetadataJSON json.RawMessage `json:"metadata_json"`
-}
-
-// Link connects a source to an agent-produced memory item.
-type Link struct {
-	SourceID     SourceID        `json:"source_id"`
-	ItemID       ItemID          `json:"item_id"`
-	Kind         LinkKind        `json:"kind"`
-	CreatedAt    time.Time       `json:"created_at"`
-	MetadataJSON json.RawMessage `json:"metadata_json"`
-}
-
-func jsonObject() json.RawMessage {
-	return json.RawMessage(`{}`)
 }

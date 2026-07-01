@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/junghwan16/my/internal/memory"
+	"github.com/junghwan16/my/internal/migrate"
+	"github.com/junghwan16/my/internal/source"
 	"github.com/junghwan16/my/internal/storage"
 )
 
@@ -40,19 +42,19 @@ func TestMemoryImportFromDirectoryRecordsSessions(t *testing.T) {
 		t.Fatalf("run returned error: %v\nstderr: %s", err, stderr.String())
 	}
 
-	store, closeStore := openStore(ctx, t, dbPath)
-	defer closeStore()
+	sources, _, closeStores := openStores(ctx, t, dbPath)
+	defer closeStores()
 
 	if !strings.Contains(stdout.String(), "imported 2 session") {
 		t.Fatalf("stdout = %q, want import count", stdout.String())
 	}
 
-	sources, err := store.Sources(ctx)
+	recorded, err := sources.Sources(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sources) != 2 {
-		t.Fatalf("sources length = %d, want 2", len(sources))
+	if len(recorded) != 2 {
+		t.Fatalf("sources length = %d, want 2", len(recorded))
 	}
 }
 
@@ -74,15 +76,15 @@ func TestMemoryImportUsesDefaultStore(t *testing.T) {
 		t.Fatalf("run returned error: %v\nstderr: %s", err, stderr.String())
 	}
 
-	store, closeStore := openStore(ctx, t, dbPath)
-	defer closeStore()
+	sources, _, closeStores := openStores(ctx, t, dbPath)
+	defer closeStores()
 
-	sources, err := store.Sources(ctx)
+	recorded, err := sources.Sources(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sources) != 1 {
-		t.Fatalf("sources length = %d, want 1", len(sources))
+	if len(recorded) != 1 {
+		t.Fatalf("sources length = %d, want 1", len(recorded))
 	}
 }
 
@@ -98,23 +100,12 @@ func TestMemoryIngestRunsConfiguredAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, closeStore := openStore(ctx, t, dbPath)
-	source := memory.Source{
-		ID:            "codex_session:test",
-		Kind:          memory.SourceKindCodexSession,
-		URI:           "memory://test/source",
-		ContentSHA256: "hash",
-		Scope: memory.Scope{
-			Kind:  memory.ScopeKindWorkspace,
-			Value: "/work/project",
-		},
-		RecordedAt:   now,
-		MetadataJSON: json.RawMessage(`{}`),
-	}
-	if err := store.RecordSource(ctx, source, nil); err != nil {
+	sources, _, closeStores := openStores(ctx, t, dbPath)
+	src := cliTestSource("codex_session:test", "source", now)
+	if err := sources.RecordSource(ctx, src, nil); err != nil {
 		t.Fatal(err)
 	}
-	closeStore()
+	closeStores()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -126,18 +117,18 @@ func TestMemoryIngestRunsConfiguredAgent(t *testing.T) {
 		t.Fatalf("stdout = %q, want ingest count", stdout.String())
 	}
 
-	store, closeStore = openStore(ctx, t, dbPath)
-	defer closeStore()
+	_, memories, closeStores := openStores(ctx, t, dbPath)
+	defer closeStores()
 
-	items, err := store.SourceItems(ctx, source.ID)
+	recalled, err := memory.NewRecaller(memories).Recall(ctx, src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("source items length = %d, want 1", len(items))
+	if len(recalled) != 1 {
+		t.Fatalf("source memories length = %d, want 1", len(recalled))
 	}
-	if !strings.Contains(items[0].Text, "memory://test/source") {
-		t.Fatalf("item text = %q, want source URI", items[0].Text)
+	if !strings.Contains(recalled[0].Text, "memory://test/source") {
+		t.Fatalf("memory text = %q, want source URI", recalled[0].Text)
 	}
 }
 
@@ -153,16 +144,16 @@ func TestMemoryIngestCanLimitSources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, closeStore := openStore(ctx, t, dbPath)
+	sources, _, closeStores := openStores(ctx, t, dbPath)
 	first := cliTestSource("codex_session:first", "first", now)
 	second := cliTestSource("codex_session:second", "second", now)
-	if err := store.RecordSource(ctx, first, nil); err != nil {
+	if err := sources.RecordSource(ctx, first, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordSource(ctx, second, nil); err != nil {
+	if err := sources.RecordSource(ctx, second, nil); err != nil {
 		t.Fatal(err)
 	}
-	closeStore()
+	closeStores()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -177,21 +168,22 @@ func TestMemoryIngestCanLimitSources(t *testing.T) {
 		t.Fatalf("run returned error: %v\nstderr: %s", err, stderr.String())
 	}
 
-	store, closeStore = openStore(ctx, t, dbPath)
-	defer closeStore()
-	firstItems, err := store.SourceItems(ctx, first.ID)
+	_, memories, closeStores := openStores(ctx, t, dbPath)
+	defer closeStores()
+	recaller := memory.NewRecaller(memories)
+	firstMemories, err := recaller.Recall(ctx, first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(firstItems) != 1 {
-		t.Fatalf("first source items length = %d, want 1", len(firstItems))
+	if len(firstMemories) != 1 {
+		t.Fatalf("first source memories length = %d, want 1", len(firstMemories))
 	}
-	secondItems, err := store.SourceItems(ctx, second.ID)
+	secondMemories, err := recaller.Recall(ctx, second.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(secondItems) != 0 {
-		t.Fatalf("second source items length = %d, want 0", len(secondItems))
+	if len(secondMemories) != 0 {
+		t.Fatalf("second source memories length = %d, want 0", len(secondMemories))
 	}
 }
 
@@ -233,14 +225,14 @@ func TestMemoryIngestParsesTuningFlags(t *testing.T) {
 	}
 }
 
-func cliTestSource(id memory.SourceID, name string, now time.Time) memory.Source {
-	return memory.Source{
+func cliTestSource(id source.SourceID, name string, now time.Time) source.Source {
+	return source.Source{
 		ID:            id,
-		Kind:          memory.SourceKindCodexSession,
+		Kind:          source.SourceKindCodexSession,
 		URI:           "memory://test/" + name,
 		ContentSHA256: "hash-" + name,
-		Scope: memory.Scope{
-			Kind:  memory.ScopeKindWorkspace,
+		Scope: source.Scope{
+			Kind:  source.ScopeKindWorkspace,
 			Value: "/work/project",
 		},
 		RecordedAt:   now,
@@ -258,21 +250,20 @@ func writeFile(t *testing.T, path string, content string) {
 	}
 }
 
-func openStore(ctx context.Context, t *testing.T, path string) (*memory.Store, func()) {
+func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, *memory.Store, func()) {
 	t.Helper()
 	db, err := storage.OpenSQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := memory.Migrate(ctx, db); err != nil {
-		if closeErr := db.Close(); closeErr != nil {
-			t.Fatalf("migrate sqlite database: %v; close sqlite database: %v", err, closeErr)
-		}
-		t.Fatal(err)
-	}
-	return memory.NewStore(db), func() {
+	closeStore := func() {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := migrate.Apply(ctx, db, path); err != nil {
+		closeStore()
+		t.Fatal(err)
+	}
+	return source.NewStore(db), memory.NewStore(db), closeStore
 }
