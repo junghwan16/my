@@ -19,16 +19,21 @@ import (
 // limit, so a search never dumps the whole store.
 const defaultSearchLimit = 20
 
-// defaultMinSimilarity is the cosine-similarity floor for semantic recall.
-// Cosine over the embedder's normalized vectors lies in [-1, 1]; an unrelated
-// query typically scores near 0 while a topical match scores well above it, so a
-// mid-range floor of 0.5 lets paraphrases through while dropping out-of-domain
-// noise. Without this floor SearchSemantic always fills to limit, so a query
-// like "요리 레시피" against a dev-memory store still returns results (issue #9);
-// with it, such below-floor candidates are excluded and the result is empty,
-// matching lexical recall. It is a default, overridable per store via
-// WithMinSimilarity, not a hardcoded inline literal.
-const defaultMinSimilarity = 0.5
+// defaultMinSimilarity is the cosine-similarity floor for semantic recall. It
+// drops the weakest candidates so SearchSemantic does not always fill to limit
+// (issue #9), while still admitting paraphrases (issue #10).
+//
+// The value is empirical, not principled: measured against real bge-m3 vectors,
+// cosine is compressed — a legitimate paraphrase ("데이터베이스 스키마 버전 관리",
+// top 0.464) and an off-topic query ("요리 레시피", top 0.464) can score
+// identically, so NO absolute floor cleanly separates relevant from off-topic.
+// 0.40 is chosen recall-first: for a memory tool, missing work the user actually
+// did (a paraphrase returning nothing) is worse than returning some low-relevance
+// memories for an absurd query. Clean separation needs discriminative memories,
+// not a better constant — today's memories are whole-session dumps (issue #7),
+// which compresses similarity; re-tune this once memories are focused summaries.
+// Overridable per store via WithMinSimilarity.
+const defaultMinSimilarity = 0.40
 
 // Store records memories and their links back to sources, and maintains the
 // full-text index used for recall.
