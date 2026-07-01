@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 	"github.com/junghwan16/gieok/internal/tokenize"
+	"github.com/junghwan16/gieok/internal/web"
 )
 
 func main() {
@@ -47,15 +50,18 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		return runMemory(ctx, args, stdout, stderr, now)
 	case "mcp":
 		return runMCP(ctx, args, stderr)
+	case "web":
+		return runWeb(ctx, args, stdout, stderr)
 	default:
 		return errUsage
 	}
 }
 
-const usageTop = `usage: gieok <memory|mcp>
+const usageTop = `usage: gieok <memory|mcp|web>
 
 memory  save session files, build Memory, and recall it
-mcp     expose recall/status/get tools to MCP clients`
+mcp     expose recall/status/get tools to MCP clients
+web     serve a local search page and /api/recall over HTTP`
 
 const usageMemory = `usage: gieok memory <import|ingest|recall>
 
@@ -381,6 +387,90 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 		server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 		return server.Run(ctx, &mcpsdk.StdioTransport{})
 	})
+}
+
+// defaultWebAddr is the loopback address gieok web binds when --addr is omitted.
+// It stays on 127.0.0.1 so the server is never exposed off the machine.
+const defaultWebAddr = "127.0.0.1:7373"
+
+type webConfig struct {
+	storePath string
+	addr      string
+}
+
+// runWeb serves the local search page and /api/recall over HTTP. It reuses
+// withStores to open the shared store and passes the same memories.Recaller the
+// CLI and MCP tools use, so the web surface returns the same ranking. The server
+// binds loopback only and blocks until ctx is cancelled or Serve fails. The web
+// scope defaults to the server's working directory, mirroring the CLI default.
+func runWeb(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
+	config, err := parseWebConfig(args, stderr)
+	if err != nil {
+		return err
+	}
+
+	scope, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve current workspace scope: %w", err)
+	}
+
+	return withStores(ctx, config.storePath, func(_ *sourcespkg.Store, memories *memoriespkg.Store) error {
+		server := web.NewServer(memoriespkg.NewRecaller(memories), scope)
+
+		var listenConfig net.ListenConfig
+		listener, err := listenConfig.Listen(ctx, "tcp", config.addr)
+		if err != nil {
+			return fmt.Errorf("bind %s: %w", config.addr, err)
+		}
+
+		if _, err := fmt.Fprintf(stdout, "gieok web serving on http://%s\n", listener.Addr()); err != nil {
+			return fmt.Errorf("write web address: %w", err)
+		}
+
+		httpServer := &http.Server{Handler: server.Handler(), ReadHeaderTimeout: 10 * time.Second}
+
+		// Shut the server down when the context is cancelled (e.g. Ctrl-C) so
+		// Serve returns instead of blocking forever.
+		go func() {
+			<-ctx.Done()
+			if closeErr := httpServer.Close(); closeErr != nil {
+				slog.New(slog.NewTextHandler(stderr, nil)).ErrorContext(ctx, "close web server", "error", closeErr)
+			}
+		}()
+
+		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve web: %w", err)
+		}
+		return nil
+	})
+}
+
+// parseWebConfig accepts "gieok web [--store <path>] [--addr <host:port>]" and
+// resolves the store path (defaulting to the shared import/ingest store) and the
+// bind address (defaulting to loopback defaultWebAddr).
+func parseWebConfig(args []string, stderr io.Writer) (webConfig, error) {
+	flagArgs := args[1:]
+	if len(flagArgs) > 0 && isHelpArg(flagArgs[0]) {
+		return webConfig{}, writeHelp(stderr, "usage: gieok web [--store <sqlite-db>] [--addr <host:port>]")
+	}
+
+	flags := flag.NewFlagSet("web", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	setUsage(flags, "usage: gieok web [--store <sqlite-db>] [--addr <host:port>]")
+	storePath := flags.String("store", "", "SQLite file that stores gieok sources and memories")
+	addr := flags.String("addr", defaultWebAddr, "loopback host:port to bind the web server to")
+	if err := flags.Parse(flagArgs); err != nil {
+		return webConfig{}, err
+	}
+
+	if *storePath == "" {
+		defaultPath, err := defaultStorePath()
+		if err != nil {
+			return webConfig{}, err
+		}
+		*storePath = defaultPath
+	}
+	return webConfig{storePath: *storePath, addr: *addr}, nil
 }
 
 // parseMCPConfig accepts "gieok mcp [serve] [--store <path>]" and resolves the
