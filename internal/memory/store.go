@@ -19,12 +19,24 @@ import (
 // limit, so a search never dumps the whole store.
 const defaultSearchLimit = 20
 
+// defaultMinSimilarity is the cosine-similarity floor for semantic recall.
+// Cosine over the embedder's normalized vectors lies in [-1, 1]; an unrelated
+// query typically scores near 0 while a topical match scores well above it, so a
+// mid-range floor of 0.5 lets paraphrases through while dropping out-of-domain
+// noise. Without this floor SearchSemantic always fills to limit, so a query
+// like "요리 레시피" against a dev-memory store still returns results (issue #9);
+// with it, such below-floor candidates are excluded and the result is empty,
+// matching lexical recall. It is a default, overridable per store via
+// WithMinSimilarity, not a hardcoded inline literal.
+const defaultMinSimilarity = 0.5
+
 // Store records memories and their links back to sources, and maintains the
 // full-text index used for recall.
 type Store struct {
-	db        *bun.DB
-	tokenizer Tokenizer
-	embedder  Embedder
+	db            *bun.DB
+	tokenizer     Tokenizer
+	embedder      Embedder
+	minSimilarity float64
 }
 
 var (
@@ -38,7 +50,15 @@ var (
 // The store starts with no embedder, so semantic recall is disabled until one
 // is attached with WithEmbedder.
 func NewStore(db *bun.DB, tokenizer Tokenizer) *Store {
-	return &Store{db: db, tokenizer: tokenizer}
+	return &Store{db: db, tokenizer: tokenizer, minSimilarity: defaultMinSimilarity}
+}
+
+// WithMinSimilarity overrides the cosine-similarity floor applied to semantic
+// recall, so callers can tune how strict out-of-domain filtering is without
+// changing the SearchSemantic signature. It returns the store for fluent wiring.
+func (s *Store) WithMinSimilarity(min float64) *Store {
+	s.minSimilarity = min
+	return s
 }
 
 // WithEmbedder attaches an optional embedder that enables semantic recall: when
@@ -247,13 +267,16 @@ type candidateVector struct {
 }
 
 // SearchSemantic ranks memories by cosine similarity between the query
-// embedding and each stored memory embedding, returning the top-limit closest.
-// It embeds the query with the store's embedder, loads candidate vectors within
-// scope (matching the embedder's model, so a model change cannot mix
-// incomparable vectors), and ranks by brute-force cosine in Go — enough for the
-// tens-of-thousands scale this store targets. It returns nil (no error) when no
-// embedder is attached or the query embeds empty, so callers fall back to
-// lexical recall gracefully. Scope and limit follow SearchMemories.
+// embedding and each stored memory embedding, returning the top-limit closest
+// that clear the store's similarity floor (see defaultMinSimilarity). It embeds
+// the query with the store's embedder, loads candidate vectors within scope
+// (matching the embedder's model, so a model change cannot mix incomparable
+// vectors), and ranks by brute-force cosine in Go — enough for the
+// tens-of-thousands scale this store targets. Candidates below the floor are
+// dropped, so an out-of-domain query returns nothing rather than filling to
+// limit. It returns nil (no error) when no embedder is attached or the query
+// embeds empty, so callers fall back to lexical recall gracefully. Scope and
+// limit follow SearchMemories.
 func (s *Store) SearchSemantic(ctx context.Context, query, scope string, limit int) ([]Memory, error) {
 	if s.embedder == nil {
 		return nil, nil
@@ -273,7 +296,7 @@ func (s *Store) SearchSemantic(ctx context.Context, query, scope string, limit i
 	if err != nil {
 		return nil, err
 	}
-	return rankBySimilarity(queryVec, candidates, limit), nil
+	return rankBySimilarity(queryVec, candidates, limit, s.minSimilarity), nil
 }
 
 // loadCandidateVectors loads every in-scope memory that has a vector for the
@@ -300,19 +323,25 @@ func (s *Store) loadCandidateVectors(ctx context.Context, scope string) ([]candi
 }
 
 // rankBySimilarity scores every candidate against the query vector by cosine
-// similarity, sorts best-first (ties broken by newest then id for stable
-// output), and returns at most limit memories. Candidates whose stored vector
-// does not match the query's dimension score 0 and sink to the bottom.
-func rankBySimilarity(queryVec []float32, candidates []candidateVector, limit int) []Memory {
+// similarity, drops any scoring below minSimilarity (so an out-of-domain query
+// yields nothing instead of the nearest-but-irrelevant memories), sorts the
+// survivors best-first (ties broken by newest then id for stable output), and
+// returns at most limit memories. Candidates whose stored vector does not match
+// the query's dimension score 0 and are dropped by the same floor.
+func rankBySimilarity(queryVec []float32, candidates []candidateVector, limit int, minSimilarity float64) []Memory {
 	type scored struct {
 		mem   Memory
 		score float64
 	}
 	ranked := make([]scored, 0, len(candidates))
 	for _, cand := range candidates {
+		score := cosineSimilarity(queryVec, decodeVector(cand.VectorBlob))
+		if score < minSimilarity {
+			continue
+		}
 		ranked = append(ranked, scored{
 			mem:   cand.toMemory(),
-			score: cosineSimilarity(queryVec, decodeVector(cand.VectorBlob)),
+			score: score,
 		})
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {

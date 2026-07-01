@@ -66,13 +66,14 @@ func openSemanticStores(ctx context.Context, t *testing.T, emb memory.Embedder) 
 }
 
 // TestSearchSemanticRanksByCosine proves the query embedding closest to memory
-// A's vector ranks A first.
+// A's vector ranks A first. Both memories sit above the similarity floor, so the
+// assertion isolates ordering, not filtering.
 func TestSearchSemanticRanksByCosine(t *testing.T) {
 	ctx := context.Background()
 	emb := fakeEmbedder{vectors: map[string][]float32{
 		"apple text":       {1, 0, 0},
 		"banana text":      {0, 1, 0},
-		"query near apple": {0.9, 0.1, 0},
+		"query near apple": {0.9, 0.6, 0},
 	}}
 	sources, memories, closeStores := openSemanticStores(ctx, t, emb)
 	defer closeStores()
@@ -89,6 +90,95 @@ func TestSearchSemanticRanksByCosine(t *testing.T) {
 	}
 	if got[0].ID != "memory:apple" {
 		t.Fatalf("top result = %q, want memory:apple (closest cosine)", got[0].ID)
+	}
+}
+
+// TestSearchSemanticDropsBelowSimilarityFloor proves the cosine floor excludes
+// out-of-domain memories: an off-topic query (near-orthogonal to every stored
+// vector, low cosine) returns nothing, while an on-topic query (high cosine to a
+// stored vector) still returns that memory. It asserts threshold behavior
+// (below floor excluded, above floor included), not exact cosine numbers.
+func TestSearchSemanticDropsBelowSimilarityFloor(t *testing.T) {
+	ctx := context.Background()
+	emb := fakeEmbedder{vectors: map[string][]float32{
+		// Two dev memories share the same direction.
+		"schema migration notes": {1, 0, 0},
+		"query index tuning":     {1, 0, 0},
+		// On-topic query: aligned with the stored vectors (cosine 1.0, above floor).
+		"on topic query": {0.95, 0.05, 0},
+		// Off-topic query: near-orthogonal to every stored vector (cosine ~0, below floor).
+		"off topic query": {0, 0, 1},
+	}}
+	sources, memories, closeStores := openSemanticStores(ctx, t, emb)
+	defer closeStores()
+
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "schema migration notes")
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/a"), "memory:b", "query index tuning")
+
+	recaller := memory.NewRecaller(memories)
+
+	onTopic, err := recaller.SearchSemantic(ctx, "on topic query", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(onTopic) != 2 {
+		t.Fatalf("on-topic semantic results = %d, want 2 (both above floor)", len(onTopic))
+	}
+
+	offTopic, err := recaller.SearchSemantic(ctx, "off topic query", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(offTopic) != 0 {
+		t.Fatalf("off-topic semantic results = %d, want 0 (all below cosine floor)", len(offTopic))
+	}
+}
+
+// TestSearchSemanticFloorConfigurable proves WithMinSimilarity tunes the floor:
+// lowering it below a memory's cosine lets that otherwise-excluded memory back
+// into the results.
+func TestSearchSemanticFloorConfigurable(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.OpenSQLite(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}()
+	if err = migrate.Apply(ctx, db, "unused"); err != nil {
+		t.Fatal(err)
+	}
+	sources := source.NewStore(db)
+
+	emb := fakeEmbedder{vectors: map[string][]float32{
+		// Stored vector is near-orthogonal to the query: cosine well below the
+		// default floor, so the default store excludes it.
+		"weakly related memory": {0, 1, 0},
+		"query":                 {1, 0.2, 0},
+	}}
+	memories := memory.NewStore(db, spaceTokenizer{}).WithEmbedder(emb)
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "weakly related memory")
+
+	// Default floor (0.5) excludes the weakly related memory.
+	got, err := memory.NewRecaller(memories).SearchSemantic(ctx, "query", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("default-floor results = %d, want 0 (below floor)", len(got))
+	}
+
+	// A floor of -1 admits every candidate, so the same memory is now returned.
+	loose := memory.NewStore(db, spaceTokenizer{}).WithEmbedder(emb).WithMinSimilarity(-1)
+	got, err = memory.NewRecaller(loose).SearchSemantic(ctx, "query", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "memory:a" {
+		t.Fatalf("loose-floor results = %#v, want single memory:a", got)
 	}
 }
 
