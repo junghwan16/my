@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 )
 
 func TestParseAgentMemoriesPlainTextIsSingleSummary(t *testing.T) {
@@ -142,6 +144,75 @@ func TestExecRunnerSurfacesStderrOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "boom happened") {
 		t.Fatalf("error = %v, want it to contain stderr 'boom happened'", err)
+	}
+}
+
+func TestBuildIngestPromptStatesJSONOutputContract(t *testing.T) {
+	prompt := buildIngestPrompt(AgentInput{Source: sourcespkg.Source{ID: "s:1", Kind: "codex_session"}})
+
+	for _, want := range []string{
+		"JSON array of memory objects",
+		`"relates_to"`,
+		"decision | fact | gotcha | convention | summary",
+		"empty array: []",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing output-contract cue %q\nprompt:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestBuildIngestPromptDropsEmptyEventsAndLabelsByRole(t *testing.T) {
+	input := AgentInput{
+		Source: sourcespkg.Source{ID: "s:1"},
+		Events: []sourcespkg.SourceEvent{
+			{Type: "session_meta"},                                 // no text: structural noise
+			{Type: "response_item", Role: "user", Text: "fix bug"}, // substantive
+			{Type: "response_item"},                                // no text: dropped
+			{Type: "response_item", Role: "assistant", Text: "done"},
+		},
+	}
+
+	prompt := buildIngestPrompt(input)
+
+	if strings.Contains(prompt, "session_meta") {
+		t.Fatalf("empty structural event leaked into prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "- user: fix bug") {
+		t.Fatalf("substantive event missing or mislabeled (want role label):\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "- assistant: done") {
+		t.Fatalf("assistant event missing or mislabeled:\n%s", prompt)
+	}
+}
+
+func TestBuildIngestPromptListsRelatedMemoryIds(t *testing.T) {
+	input := AgentInput{
+		Source: sourcespkg.Source{ID: "s:1"},
+		RelatedMemories: []RecallResult{
+			{MemoryID: "memory:abc", Kind: MemoryKindSummary, Text: "prior knowledge"},
+		},
+	}
+
+	prompt := buildIngestPrompt(input)
+
+	if !strings.Contains(prompt, "[memory:abc]") {
+		t.Fatalf("related memory id not listed for relates_to:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "relates_to") {
+		t.Fatalf("prompt does not instruct linking via relates_to:\n%s", prompt)
+	}
+}
+
+func TestSubstantiveEventsDropsTextlessRows(t *testing.T) {
+	events := []sourcespkg.SourceEvent{
+		{Type: "session_meta"},
+		{Type: "msg", Text: "real"},
+		{Type: "mode", Text: "   "},
+	}
+	got := substantiveEvents(events)
+	if len(got) != 1 || got[0].Text != "real" {
+		t.Fatalf("substantiveEvents = %#v, want only the one row with real text", got)
 	}
 }
 

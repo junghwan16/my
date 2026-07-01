@@ -202,8 +202,9 @@ func runMemoryIngest(ctx context.Context, args []string, stdout io.Writer, stder
 
 		if _, err := fmt.Fprintf(
 			stdout,
-			"built %d memories from %d source(s), failed %d agent run(s)\n",
+			"built %d memories (%d relations) from %d source(s), failed %d agent run(s)\n",
 			result.Memories,
+			result.Relations,
 			result.Sources,
 			result.Errors,
 		); err != nil {

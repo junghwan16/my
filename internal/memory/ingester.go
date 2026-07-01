@@ -93,9 +93,19 @@ type IngestOptions struct {
 
 // IngestResult summarizes an ingest run.
 type IngestResult struct {
-	Sources  int
-	Memories int
-	Errors   int
+	Sources   int
+	Memories  int
+	Relations int
+	Errors    int
+}
+
+// ingestCounts tallies what one source's ingest produced, so ingestSource can
+// report memories, memory-to-memory relations, and failed agent runs without a
+// widening tuple return.
+type ingestCounts struct {
+	memories  int
+	relations int
+	errors    int
 }
 
 // Ingester runs agents over saved Sources and links the memories they produce.
@@ -141,13 +151,14 @@ func (in *Ingester) Ingest(ctx context.Context, options IngestOptions, now time.
 		if err != nil {
 			return IngestResult{}, err
 		}
-		memories, agentErrors, err := in.ingestSource(ctx, src, events, sem, options.SkipExisting, now)
+		counts, err := in.ingestSource(ctx, src, events, sem, options.SkipExisting, now)
 		if err != nil {
 			return IngestResult{}, err
 		}
 		result.Sources++
-		result.Memories += memories
-		result.Errors += agentErrors
+		result.Memories += counts.memories
+		result.Relations += counts.relations
+		result.Errors += counts.errors
 	}
 	return result, nil
 }
@@ -184,18 +195,18 @@ func (in *Ingester) ingestSource(
 	sem chan struct{},
 	skipExisting bool,
 	now time.Time,
-) (int, int, error) {
+) (ingestCounts, error) {
 	active, err := in.selectAgents(ctx, src.ID, skipExisting)
 	if err != nil {
-		return 0, 0, err
+		return ingestCounts{}, err
 	}
 	if len(active) == 0 {
-		return 0, 0, nil
+		return ingestCounts{}, nil
 	}
 
 	related, err := in.recallRelatedMemories(ctx, src, events)
 	if err != nil {
-		return 0, 0, err
+		return ingestCounts{}, err
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -216,12 +227,11 @@ func (in *Ingester) ingestSource(
 		}(agent)
 	}
 
-	var count int
-	var agentErrors int
+	var counts ingestCounts
 	for range active {
 		run := <-results
 		if run.err != nil {
-			agentErrors++
+			counts.errors++
 			in.logger.ErrorContext(ctx, "ingest agent failed",
 				"source_id", src.ID,
 				"agent", run.agent,
@@ -232,17 +242,19 @@ func (in *Ingester) ingestSource(
 
 		memories, links, relations := memoriesFromAgentRun(src.ID, run, related, now)
 		if err := in.memories.ReplaceSourceMemories(ctx, src.ID, run.agent, memories, links, relations); err != nil {
-			return 0, agentErrors, err
+			return counts, err
 		}
-		count += len(memories)
+		counts.memories += len(memories)
+		counts.relations += len(relations)
 
 		in.logger.InfoContext(ctx, "ingested source with agent",
 			"source_id", src.ID,
 			"agent", run.agent,
 			"memories", len(memories),
+			"relations", len(relations),
 		)
 	}
-	return count, agentErrors, nil
+	return counts, nil
 }
 
 // recallRelatedMemories finds existing memory relevant to a source before any
