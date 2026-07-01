@@ -80,15 +80,37 @@ func (s *Store) WithEmbedder(embedder Embedder) *Store {
 // source. Memories linked to the source by the same agent that are absent from the
 // new set are deleted, so re-ingesting a source never accumulates stale memories.
 func (s *Store) ReplaceSourceMemories(ctx context.Context, sourceID source.SourceID, agent string, memories []Memory, links []Link) error {
+	// Embed OUTSIDE the write transaction. The embedder is a slow network call
+	// (a local Ollama round-trip); embedding inside the transaction held the
+	// SQLite write lock for its whole duration, so a second process touching the
+	// store (e.g. the MCP server) hit "database is locked". Precompute vectors
+	// here, then the transaction only does fast local writes.
+	vectors := s.embedMemories(ctx, memories)
 	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := s.deleteStaleMemories(ctx, tx, sourceID, agent); err != nil {
 			return err
 		}
-		if err := s.upsertMemories(ctx, tx, memories); err != nil {
+		if err := s.upsertMemories(ctx, tx, memories, vectors); err != nil {
 			return err
 		}
 		return s.upsertLinks(ctx, tx, links)
 	})
+}
+
+// embedMemories embeds each memory's text with the store's embedder, outside any
+// transaction. It returns nil when no embedder is attached; a per-memory embed
+// failure is skipped so one unreachable call never blocks the write.
+func (s *Store) embedMemories(ctx context.Context, memories []Memory) map[MemoryID][]float32 {
+	if s.embedder == nil {
+		return nil
+	}
+	vectors := make(map[MemoryID][]float32, len(memories))
+	for i := range memories {
+		if vec, ok := embedTolerant(ctx, s.embedder, memories[i].Text); ok {
+			vectors[memories[i].ID] = vec
+		}
+	}
+	return vectors
 }
 
 // deleteStaleMemories removes every memory (and its links and search rows) that
@@ -123,7 +145,7 @@ func (s *Store) deleteStaleMemories(ctx context.Context, tx bun.Tx, sourceID sou
 	return s.deleteFTS(ctx, tx, staleIDs)
 }
 
-func (s *Store) upsertMemories(ctx context.Context, tx bun.Tx, memories []Memory) error {
+func (s *Store) upsertMemories(ctx context.Context, tx bun.Tx, memories []Memory, vectors map[MemoryID][]float32) error {
 	for i := range memories {
 		mem := memories[i]
 		if len(mem.MetadataJSON) == 0 {
@@ -143,7 +165,7 @@ func (s *Store) upsertMemories(ctx context.Context, tx bun.Tx, memories []Memory
 		if err := s.indexFTS(ctx, tx, mem); err != nil {
 			return err
 		}
-		if err := s.indexVector(ctx, tx, mem); err != nil {
+		if err := s.writeVector(ctx, tx, mem.ID, vectors[mem.ID]); err != nil {
 			return err
 		}
 	}
@@ -510,22 +532,25 @@ func (s *Store) indexFTS(ctx context.Context, tx bun.Tx, mem Memory) error {
 // call fails (e.g. Ollama went away mid-write), the stale vector is cleared and
 // the memory is left without one rather than failing the whole write; the
 // backfill re-embeds it on a later run once the embedder is healthy again.
-func (s *Store) indexVector(ctx context.Context, tx bun.Tx, mem Memory) error {
+// writeVector replaces a memory's stored embedding inside the transaction. The
+// vector is precomputed outside the transaction (see embedMemories), so this
+// does only fast local writes and never holds the lock during an embed. A nil
+// vec (no embedder, or a skipped embed) just clears any stale row.
+func (s *Store) writeVector(ctx context.Context, tx bun.Tx, memID MemoryID, vec []float32) error {
 	if s.embedder == nil {
 		return nil
 	}
 	if _, err := tx.NewDelete().
 		Model((*vectorRow)(nil)).
-		Where("memory_id = ?", string(mem.ID)).
+		Where("memory_id = ?", string(memID)).
 		Exec(ctx); err != nil {
 		return fmt.Errorf("clear memory vector: %w", err)
 	}
-	vec, ok := embedTolerant(ctx, s.embedder, mem.Text)
-	if !ok {
+	if len(vec) == 0 {
 		return nil
 	}
 	if _, err := tx.NewInsert().
-		Model(newVectorRow(string(mem.ID), s.embedder.Model(), vec)).
+		Model(newVectorRow(string(memID), s.embedder.Model(), vec)).
 		Exec(ctx); err != nil {
 		return fmt.Errorf("store memory vector: %w", err)
 	}

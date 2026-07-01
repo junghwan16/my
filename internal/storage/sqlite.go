@@ -15,7 +15,7 @@ import (
 // REFERENCES/ON DELETE CASCADE constraints (off by default in SQLite),
 // busy_timeout avoids spurious "database is locked" errors, and WAL improves
 // read/write concurrency for the local store.
-const sqlitePragmas = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
+const sqlitePragmas = "_pragma=busy_timeout(15000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
 
 // OpenSQLite opens a SQLite database handle with the store's required pragmas.
 //
