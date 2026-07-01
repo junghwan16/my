@@ -11,6 +11,11 @@
   - 저장된 세션마다 설정된 에이전트(기본: claude, codex, pi)를 병렬 실행해 Memory를 생성·링크합니다.
   - 옵션: `--limit`, `--source-id`, `--concurrency`(동시 실행 상한), `--skip-existing`(이미 수집한 (source, agent) 건너뛰기, 재개용).
   - 동일 세션을 재수집해도 에이전트별로 이전 Memory를 원자적으로 교체해 중복이 쌓이지 않습니다.
+- **`my memory recall [task] [--scope <value>] [--all-scopes] [--limit <n>] [--json] [--store <db>]`**
+  - 현재 Scope 안에서 task에 관련된 Memory를 다시 떠올립니다. Recall은 raw 세션 검색이 아니라 ingest된 Memory를 재사용하는 도메인 액션입니다.
+  - task 텍스트는 positional 또는 `--task`로 전달합니다. 관련 랭킹은 한국어 형태소 토큰화 + FTS5(BM25)입니다(ADR 0004). task를 생략하면 Scope 안의 최근 Memory를 반환합니다.
+  - Scope는 기본적으로 현재 작업 디렉터리에서 파생됩니다. `--scope`로 다른 워크스페이스를, `--all-scopes`로 전체 Scope를 조회합니다.
+  - 기본 출력은 사람이 읽는 형식(Memory ID·agent·kind·시각·본문·Source 컨텍스트)입니다. `--json`은 future MCP `memory.recall`과 공유하는 구조화 결과 모델을 냅니다.
 
 기본 저장 위치: `~/.local/share/my/memory/my.db`
 

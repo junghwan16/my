@@ -221,6 +221,87 @@ func (s *Store) SearchMemories(ctx context.Context, query, scope string, limit i
 	return memories, nil
 }
 
+// SearchRecollections returns memories matching query, ranked by FTS5 BM25 and
+// restricted to scope, each carrying the Source context it was linked from. It
+// is the recall read surface the CLI and a future MCP tool share.
+func (s *Store) SearchRecollections(ctx context.Context, query, scope string, limit int) ([]Recollection, error) {
+	memories, err := s.SearchMemories(ctx, query, scope, limit)
+	if err != nil {
+		return nil, err
+	}
+	return s.attachSources(ctx, memories, scope)
+}
+
+// RecentRecollections returns the most recently created memories within scope,
+// each carrying its Source context. An empty scope spans every scope. It backs
+// recall when no task text is given, so the command doubles as a workspace
+// memory overview. A non-positive limit falls back to defaultSearchLimit.
+func (s *Store) RecentRecollections(ctx context.Context, scope string, limit int) ([]Recollection, error) {
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+
+	query := s.db.NewSelect().
+		Model((*memoryRow)(nil))
+	if scope != "" {
+		// A memory can link to several in-scope sources; EXISTS keeps one row
+		// per memory (SQLite has no DISTINCT ON) while still filtering by scope.
+		query = query.Where(
+			"EXISTS (SELECT 1 FROM memory_links AS l JOIN sources AS sr ON sr.id = l.source_id"+
+				" WHERE l.memory_id = memory.id AND sr.scope_value = ?)", scope)
+	}
+
+	var rows []memoryRow
+	if err := query.
+		Order("memory.created_at DESC", "memory.id").
+		Limit(limit).
+		Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("load recent memories: %w", err)
+	}
+
+	memories := make([]Memory, 0, len(rows))
+	for _, row := range rows {
+		memories = append(memories, row.toMemory())
+	}
+	return s.attachSources(ctx, memories, scope)
+}
+
+// attachSources loads the Source context for each memory and returns
+// recollections in the same order as memories. When scope is non-empty, only
+// Sources in that scope are attached, so the recall never leaks a Memory's
+// out-of-scope provenance. Sources are ordered by Source ID for stable output.
+func (s *Store) attachSources(ctx context.Context, memories []Memory, scope string) ([]Recollection, error) {
+	if len(memories) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]string, 0, len(memories))
+	for _, mem := range memories {
+		ids = append(ids, string(mem.ID))
+	}
+
+	query := s.db.NewSelect().
+		Model((*linkRow)(nil)).
+		Column("link.memory_id").
+		ColumnExpr("sr.id AS source_id").
+		ColumnExpr("sr.uri AS source_uri").
+		ColumnExpr("sr.scope_kind AS scope_kind").
+		ColumnExpr("sr.scope_value AS scope_value").
+		Join("JOIN sources AS sr ON sr.id = link.source_id").
+		Where("link.memory_id IN (?)", bun.List(ids))
+	if scope != "" {
+		query = query.Where("sr.scope_value = ?", scope)
+	}
+
+	var refs []sourceRefRow
+	if err := query.
+		Order("link.memory_id", "sr.id").
+		Scan(ctx, &refs); err != nil {
+		return nil, fmt.Errorf("load recollection sources: %w", err)
+	}
+	return assembleRecollections(memories, refs), nil
+}
+
 // ReindexMemories rebuilds the full-text index from every stored memory. It is
 // idempotent and backfills memories recorded before the index existed.
 func (s *Store) ReindexMemories(ctx context.Context) error {

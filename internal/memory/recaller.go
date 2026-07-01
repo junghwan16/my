@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"strings"
 
 	"github.com/junghwan16/my/internal/source"
 )
@@ -11,6 +12,8 @@ type MemoryReader interface {
 	SourceMemories(context.Context, source.SourceID) ([]Memory, error)
 	SourceLinks(context.Context, source.SourceID) ([]Link, error)
 	SearchMemories(ctx context.Context, query, scope string, limit int) ([]Memory, error)
+	SearchRecollections(ctx context.Context, query, scope string, limit int) ([]Recollection, error)
+	RecentRecollections(ctx context.Context, scope string, limit int) ([]Recollection, error)
 }
 
 // Recaller finds relevant memory. It recalls by source, and searches memory
@@ -39,4 +42,16 @@ func (r *Recaller) Search(ctx context.Context, query, scope string, limit int) (
 // Links returns the source-to-memory links for a source.
 func (r *Recaller) Links(ctx context.Context, id source.SourceID) ([]Link, error) {
 	return r.store.SourceLinks(ctx, id)
+}
+
+// Recollect is the recall application seam the CLI and a future MCP tool share.
+// It finds relevant Memory within a Scope for the current task and returns
+// Recollections carrying Source context. With task text it ranks by lexical
+// match; with empty task text it returns recent Memory in scope, so recall
+// doubles as a workspace memory overview. An empty scope spans every scope.
+func (r *Recaller) Recollect(ctx context.Context, task, scope string, limit int) ([]Recollection, error) {
+	if strings.TrimSpace(task) == "" {
+		return r.store.RecentRecollections(ctx, scope, limit)
+	}
+	return r.store.SearchRecollections(ctx, task, scope, limit)
 }
