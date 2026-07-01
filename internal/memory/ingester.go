@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -236,9 +235,6 @@ func (in *Ingester) ingestSource(
 			"agent", run.agent,
 			"memories", len(memories),
 		)
-	}
-	if agentErrors == len(active) {
-		return 0, agentErrors, fmt.Errorf("all ingest agents failed for source %q", src.ID)
 	}
 	return count, agentErrors, nil
 }

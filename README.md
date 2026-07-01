@@ -7,8 +7,9 @@
 - **`gieok memory import --from <path> --store <db>`**
   - Codex / Claude Code 세션 JSONL 파일(또는 디렉터리)을 파싱해 SQLite에 정규화 저장합니다.
   - 지원하지 않는 파일은 건너뜁니다.
-- **`gieok memory ingest [--agent name=cmd[,arg...]] [--store <db>]`**
+- **`gieok memory ingest [--agent <name=cmd[,arg...]|claude|codex|pi>] [--store <db>]`**
   - 저장된 세션마다 설정된 에이전트(기본: claude, codex, pi)를 병렬 실행해 Memory를 생성·링크합니다.
+  - `--agent`는 `name=command[,arg...]`로 커스텀 커맨드를 지정하거나, `claude`/`codex`/`pi`처럼 이름만 줘서 해당 기본 에이전트를 인자까지 그대로 쓸 수 있습니다(콤마가 든 인자는 `name=command[,arg...]` 문법으로 표현할 수 없어 필요). 옵션을 생략하면 세 기본 에이전트를 모두 실행합니다.
   - 옵션: `--limit`, `--source-id`, `--concurrency`(동시 실행 상한), `--skip-existing`(이미 수집한 (source, agent) 건너뛰기, 재개용).
   - 동일 세션을 재수집해도 에이전트별로 이전 Memory를 원자적으로 교체해 중복이 쌓이지 않습니다.
   - 에이전트를 실행하기 전, 같은 Scope 안에서 그 Source와 관련된 기존 Memory를 먼저 recall해 프롬프트에 함께 넣습니다(자기 자신의 Source에서 나온 Memory는 제외). 그래서 에이전트는 매 Source를 고립된 채로 요약하는 게 아니라, 이미 아는 것과 연결·확장·갱신하는 방식으로 Memory를 만듭니다. Memory는 세션 텍스트를 그대로 옮긴 것이 아니라 에이전트가 1차로 정제한 결과여야 합니다 — 요약만 하는 no-op 에이전트로는 이 이점을 못 받습니다.
@@ -27,11 +28,18 @@
 
 ## 세션 자동 캡처
 
-Claude Code / Codex 세션은 이미 `~/.claude/projects/*.jsonl` 등에 쌓입니다. 이를
-주기적으로 훑어 기록합니다(cron / launchd):
+Claude Code / Codex 세션은 이미 `~/.claude/projects/*.jsonl`, `~/.codex/sessions`
+등에 쌓입니다. 두 단계로 나눠 자동 캡처합니다:
+
+- **Import (즉시, 세션 종료 시)**: Claude Code `SessionEnd` 훅이 방금 끝난 세션 하나만
+  `gieok memory import --from <transcript>`로 가볍게 저장합니다. Fail-soft라 실패해도
+  세션 종료를 막지 않습니다.
+- **Ingest (배치, cron)**: 매일 정오에 cron이 Codex 세션 디렉터리를 통째로 import한 뒤,
+  `--skip-existing`으로 아직 요약이 없는 소스만 `claude` 에이전트로 ingest합니다.
 
 ```sh
-gieok memory import --from ~/.claude/projects && gieok memory ingest
+gieok memory import --from ~/.codex/sessions
+gieok memory ingest --skip-existing --agent claude
 ```
 
 배치 방식이라 per-turn 오버헤드가 없고 세션당 중복 Source도 생기지 않습니다.
