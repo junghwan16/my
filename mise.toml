@@ -4,14 +4,14 @@ golangci-lint = "2.12.2"
 
 [tasks.fmt]
 description = "Format Go files with gofmt."
-run = "gofmt -w $(git ls-files '*.go')"
+run = "find . -name '*.go' -not -path './.git/*' -not -path './.cache/*' -print0 | xargs -0 gofmt -w"
 
 [tasks.verify]
 description = "Run the local Go presubmit checks."
 run = '''
 set -eu
 
-files="$(gofmt -l $(git ls-files '*.go'))"
+files="$(find . -name '*.go' -not -path './.git/*' -not -path './.cache/*' -print0 | xargs -0 gofmt -l)"
 if [ -n "$files" ]; then
   printf 'gofmt needed:\n%s\n' "$files"
   exit 1

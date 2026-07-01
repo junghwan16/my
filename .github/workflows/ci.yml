@@ -25,7 +25,7 @@ jobs:
 
       - name: Check Go formatting
         run: |
-          files="$(gofmt -l $(git ls-files '*.go'))"
+          files="$(find . -name '*.go' -not -path './.git/*' -not -path './.cache/*' -print0 | xargs -0 gofmt -l)"
           if [ -n "$files" ]; then
             printf 'gofmt needed:\n%s\n' "$files"
             exit 1
