@@ -2,59 +2,55 @@
 status: accepted
 ---
 
-# 스키마 마이그레이션은 goose(embedded SQL) + 파괴적 변경 전 자동 백업으로 관리한다
+# 스키마 마이그레이션은 GORM + 필요한 SQLite SQL + 자동 백업으로 관리한다
 
-이 프로젝트는 완전한 로컬 데스크탑 앱이다: 사용자당 SQLite 파일 1개
-(`~/.local/share/gieok/memory/gieok.db`)가 유일본이고, 마이그레이션 커맨드를 사용자가
-직접 칠 일이 없으며, 단일 바이너리로 배포된다. 초기 구현은 `source.Migrate` /
-`memory.Migrate` 가 각각 `CREATE TABLE IF NOT EXISTS` 를 실행할 뿐, 버전 개념이
-없어 컬럼 진화·이력·순서 보장이 불가능했다.
+gieok은 사용자당 SQLite 파일 1개
+(`~/.local/share/gieok/memory/gieok.db`)가 유일한 저장소다. 사용자가 별도
+마이그레이션 명령을 실행하지 않고, `cmd/gieok` 이 DB를 열 때 `migrate.Apply` 를
+자동 실행한다.
+
+초기 구현은 Source/Memory 패키지가 각자 `CREATE TABLE IF NOT EXISTS` 를 직접
+실행해서 버전, 순서, 기존 DB 진화를 추적하기 어려웠다. 이후 goose SQL 파일을
+도입했지만, 실제 테이블 모델은 Go 코드에 이미 있고 SQL 파일은 같은 스키마를 한 번 더
+표현했다.
 
 ## 결정
 
-검증된 마이그레이션 라이브러리 **goose(`github.com/pressly/goose/v3`)** 를
-도입한다. `internal/migrate` 가 마이그레이션을 소유한다:
+`internal/migrate` 가 **GORM 기반 schema apply** 를 소유한다.
 
-- **DDL 은 goose SQL 파일**(`migrations/00001_*.sql`, `00002_*.sql`)로 두고
-  `//go:embed` 로 바이너리에 심는다. 단일 바이너리가 자기 스키마를 들고 다닌다.
-- `source.Migrate`/`memory.Migrate` 는 제거했고, 도메인 패키지는 row 모델과
-  쿼리만 소유한다.
-- **버전 추적**: goose 의 `goose_db_version` 테이블(라이브러리 기본).
-- **자동 실행**: goose Provider API 로 `cmd/gieok` 의 `withStores` 가 DB 를 열자마자
-  `migrate.Apply` 를 호출한다. 사용자에게 마이그레이션은 보이지 않는다.
-- **순서**: 파일 번호가 곧 버전이라 `00001`(sources) → `00002`(memory_links)
-  순으로 FK 의존(`memory_links → sources`)이 보장된다.
-- **baseline 호환**: `00001`/`00002` 는 `CREATE TABLE IF NOT EXISTS` 라, 버전 이전에
-  만들어진 기존 DB(테이블은 있고 `goose_db_version` 은 없음)에서 no-op 으로
-  적용된 뒤 버전만 기록된다. 무중단 도입.
+- 일반 테이블(`sources`, `source_events`, `memories`, `memory_links`,
+  `memory_vectors`, `schema_versions`)은 GORM 모델과 `AutoMigrate` 로 만든다.
+- FTS5 가상 테이블(`memories_fts`)은 GORM 모델로 표현할 수 없으므로
+  `CREATE VIRTUAL TABLE IF NOT EXISTS` SQL을 명시적으로 실행한다.
+- schema 버전은 `schema_versions(name, version, updated_at)` 에 기록한다.
+- 기존 goose DB는 `goose_db_version` 을 읽어 현재 버전을 추정한 뒤 GORM ledger로
+  흡수한다. 이전 `recorded_at` 컬럼은 apply 중 `imported_at` 으로 rename 한다.
+- 도메인 패키지(`internal/source`, `internal/memory`)는 row 모델과 쿼리만 가진다.
 
-## 파괴적 마이그레이션 전 자동 백업
+## 자동 백업
 
-기억 저장소는 유일본이므로, goose 를 얇게 감싸 **이미 버전이 매겨진 DB**
-(goose 현재 버전 ≥ 1)에 pending 마이그레이션을 적용하기 직전
-`VACUUM INTO '<db>.bak-v<N>'` 로 스냅샷을 뜬다. Provider 의
-`GetVersions(current, target)` 로 pending 여부를 판정한다.
+기존 저장소를 변경해야 하면 적용 직전 `VACUUM INTO '<db>.bak-v<N>'` 로 스냅샷을 만든다.
+신규 DB는 백업하지 않는다.
 
-- `VACUUM INTO` 는 WAL 상태에서도 일관된 스냅샷을 만든다(단순 파일 복사는 -wal
-  내용을 놓칠 수 있다).
-- 버전 0(신규 DB 또는 버전 이전 DB)의 baseline 은 no-op 이라 백업하지 않는다.
+- `VACUUM INTO` 는 WAL 상태에서도 일관된 스냅샷을 만든다.
+- `<N>` 은 GORM ledger가 있으면 그 버전, 없으면 legacy goose 버전, 둘 다 없으면 0이다.
+- 같은 스키마에 대해 `Apply` 를 반복 실행하면 아무 변경도 하지 않는다.
 
-## SQLite 주의점 (구현 메모)
+## SQLite 주의점
 
-- 컬럼 타입 변경·제약 추가는 SQLite 에서 12-step 테이블 재생성이 필요하고, 그
-  과정은 `foreign_keys=OFF`(트랜잭션 밖 토글) 를 요구한다. 그런 마이그레이션은
-  goose 파일 상단에 `-- +goose NO TRANSACTION` 을 두고 PRAGMA 를 직접 다룬다.
-  현재 파일(순수 CREATE)은 해당 없음.
+- GORM은 일반 테이블 생성과 additive migration에 적합하지만, FTS5 같은 SQLite 전용
+  객체는 raw SQL이 더 정확하다.
+- 컬럼 rename처럼 GORM이 의도를 알기 어려운 변경은 작은 명시 SQL로 둔다.
+- 연결은 기존 `*sql.DB` 를 재사용한다. storage와 GORM migrator 모두 pure-Go SQLite
+  driver를 공유하므로 cgo-free 배포를 유지한다.
 
 ## Considered options
 
-- **goose (선택)** — `embed.FS` 1급 지원, 기존 `*sql.DB` 에 바로 붙는 Provider
-  API(`HasPending`/`GetVersions`/`Up`)로 백업 래핑이 쉽다. 의존성이 가벼워 단일
-  바이너리에 적합. `modernc.org/sqlite`(cgo-free) 와 문제없이 동작.
-- **golang-migrate (거절)** — source/database 드라이버 조합과 up/down 파일 쌍이
-  필요해 상대적으로 무겁다. 로컬 단일 바이너리엔 goose 가 더 단순하다.
-- **직접 구현 러너 (거절)** — `PRAGMA user_version` 기반으로 ~90줄이면 되지만,
-  검증된 라이브러리가 있는데 마이그레이션 실행·순서·트랜잭션·상태 조회를 재발명할
-  이유가 없다.
-- **`bun/migrate` (거절)** — 이미 bun 을 쓰지만, 마이그레이션 UX·생태계는 goose 가
-  더 성숙하다.
+- **GORM + 필요한 raw SQL (선택)** — schema 모델이 Go 코드에 모이고, FTS5 같은
+  SQLite 전용 객체만 명시 SQL로 남겨 중복을 줄인다.
+- **goose SQL 파일 유지 (거절)** — 실행기는 안정적이지만, 같은 스키마가 Go row 모델과
+  SQL 파일에 중복되어 이름 변경·컬럼 진화 때 어긋나기 쉽다.
+- **직접 SQL runner (거절)** — 단순해 보이지만 버전 기록, 기존 DB 흡수, 백업 타이밍을
+  직접 계속 관리해야 한다.
+- **`bun/migrate` (거절)** — 현재 query layer는 bun을 쓰지만, 이번 결정의 목표는
+  schema source를 Go 모델로 모으는 것이므로 GORM migrator가 더 직접적이다.

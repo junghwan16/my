@@ -21,13 +21,16 @@ func TestApplyCreatesSchemaAndRecordsVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !tableExists(ctx, t, db, "sources") {
+	if !hasTable(ctx, t, db, "sources") {
 		t.Fatal("sources table missing after Apply")
 	}
-	if !tableExists(ctx, t, db, "memory_links") {
+	if !hasTable(ctx, t, db, "memory_links") {
 		t.Fatal("memory_links table missing after Apply")
 	}
-	if got, want := dbVersion(ctx, t, db), targetVersion(ctx, t, db); got != want {
+	if !hasColumn(ctx, t, db, "sources", "imported_at") {
+		t.Fatal("sources.imported_at column missing after Apply")
+	}
+	if got, want := dbVersion(ctx, t, db), schemaVersion; got != want {
 		t.Fatalf("db version = %d, want %d (fully migrated)", got, want)
 	}
 	// A fresh database (started at version 0) is not backed up.
@@ -45,11 +48,11 @@ func TestApplyIsIdempotent(t *testing.T) {
 	if err := Apply(ctx, db, path); err != nil {
 		t.Fatal(err)
 	}
-	// A second call has nothing pending and must be a clean no-op.
+	// A second call has no migrations left and must return cleanly.
 	if err := Apply(ctx, db, path); err != nil {
 		t.Fatalf("second Apply returned error: %v", err)
 	}
-	if got, want := dbVersion(ctx, t, db), targetVersion(ctx, t, db); got != want {
+	if got, want := dbVersion(ctx, t, db), schemaVersion; got != want {
 		t.Fatalf("db version = %d, want %d (fully migrated)", got, want)
 	}
 }
@@ -60,17 +63,9 @@ func TestApplyBacksUpAlreadyVersionedDatabase(t *testing.T) {
 	db, closeDB := openDB(t, path)
 	defer closeDB()
 
-	// Advance only to v1, leaving v2 pending, so the next Apply runs against an
-	// already-versioned database and snapshots it to <db>.bak-v1 first.
-	provider, err := newProvider(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := provider.UpByOne(ctx); err != nil {
-		t.Fatal(err)
-	}
+	createVersionedLegacySchema(ctx, t, db, 1)
 	if got := dbVersion(ctx, t, db); got != 1 {
-		t.Fatalf("db version after UpByOne = %d, want 1", got)
+		t.Fatalf("db version before Apply = %d, want 1", got)
 	}
 
 	if err := Apply(ctx, db, path); err != nil {
@@ -80,7 +75,7 @@ func TestApplyBacksUpAlreadyVersionedDatabase(t *testing.T) {
 	if _, err := os.Stat(path + ".bak-v1"); err != nil {
 		t.Fatalf("expected backup at %s.bak-v1: %v", path, err)
 	}
-	if got, want := dbVersion(ctx, t, db), targetVersion(ctx, t, db); got != want {
+	if got, want := dbVersion(ctx, t, db), schemaVersion; got != want {
 		t.Fatalf("db version = %d, want %d (fully migrated)", got, want)
 	}
 }
@@ -100,33 +95,18 @@ func openDB(t *testing.T, path string) (*bun.DB, func()) {
 
 func dbVersion(ctx context.Context, t *testing.T, db *bun.DB) int64 {
 	t.Helper()
-	provider, err := newProvider(db)
+	gormDB, err := openGORM(db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	version, err := provider.GetDBVersion(ctx)
+	version, err := currentVersion(ctx, gormDB, db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return version
 }
 
-// targetVersion is the highest embedded migration version, so tests assert
-// "fully migrated" without hardcoding a count that every new migration breaks.
-func targetVersion(ctx context.Context, t *testing.T, db *bun.DB) int64 {
-	t.Helper()
-	provider, err := newProvider(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, target, err := provider.GetVersions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return target
-}
-
-func tableExists(ctx context.Context, t *testing.T, db *bun.DB, name string) bool {
+func hasTable(ctx context.Context, t *testing.T, db *bun.DB, name string) bool {
 	t.Helper()
 	var count int
 	if err := db.QueryRowContext(ctx,
@@ -135,4 +115,68 @@ func tableExists(ctx context.Context, t *testing.T, db *bun.DB, name string) boo
 		t.Fatal(err)
 	}
 	return count > 0
+}
+
+func hasColumn(ctx context.Context, t *testing.T, db *bun.DB, table string, column string) bool {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == column {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return false
+}
+
+func createVersionedLegacySchema(ctx context.Context, t *testing.T, db *bun.DB, version int64) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE sources (
+		id TEXT PRIMARY KEY,
+		kind TEXT NOT NULL,
+		uri TEXT NOT NULL,
+		content_sha256 TEXT NOT NULL,
+		scope_kind TEXT NOT NULL,
+		scope_value TEXT NOT NULL,
+		started_at TEXT,
+		ended_at TEXT,
+		recorded_at TEXT NOT NULL,
+		metadata_json TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE schema_versions (
+		name TEXT PRIMARY KEY,
+		version INTEGER NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO schema_versions (name, version, updated_at) VALUES (?, ?, '2026-07-01T00:00:00Z')",
+		schemaName,
+		version,
+	); err != nil {
+		t.Fatal(err)
+	}
 }

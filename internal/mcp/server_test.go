@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/junghwan16/gieok/internal/mcp"
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 	"github.com/junghwan16/gieok/internal/migrate"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 	"github.com/junghwan16/gieok/internal/tokenize"
 
@@ -25,7 +25,7 @@ func TestRecallReturnsRankedMemoryWithSource(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "코스피 종목 분석 리포트")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/b"), "memory:b", "오늘 날씨 정보")
 
-	server := mcp.NewServer(memory.NewRecaller(memories))
+	server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 
 	out, err := server.Recall(ctx, mcp.RecallInput{Query: "종목"})
 	if err != nil {
@@ -40,9 +40,9 @@ func TestRecallReturnsRankedMemoryWithSource(t *testing.T) {
 		t.Fatalf("memory id = %q, want memory:a", got.MemoryID)
 	}
 	if got.Text != "코스피 종목 분석 리포트" {
-		t.Fatalf("text = %q, want the recorded memory text", got.Text)
+		t.Fatalf("text = %q, want the saved memory text", got.Text)
 	}
-	if got.Agent != "t" || got.Kind != string(memory.MemoryKindSummary) {
+	if got.Agent != "t" || got.Kind != string(memoriespkg.MemoryKindSummary) {
 		t.Fatalf("agent/kind = %q/%q, want t/summary", got.Agent, got.Kind)
 	}
 	if got.Created == "" {
@@ -61,7 +61,7 @@ func TestRecallReturnsRankedMemoryWithSource(t *testing.T) {
 	if src.Scope.Value != "/work/a" {
 		t.Fatalf("source scope value = %q, want /work/a", src.Scope.Value)
 	}
-	if src.Scope.Kind != string(source.ScopeKindWorkspace) {
+	if src.Scope.Kind != string(sourcespkg.ScopeKindWorkspace) {
 		t.Fatalf("source scope kind = %q, want workspace", src.Scope.Kind)
 	}
 }
@@ -74,7 +74,7 @@ func TestRecallHonorsScope(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/b"), "memory:b", "종목 추천")
 
-	server := mcp.NewServer(memory.NewRecaller(memories))
+	server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 
 	scoped, err := server.Recall(ctx, mcp.RecallInput{Query: "종목", Scope: "/work/a"})
 	if err != nil {
@@ -102,7 +102,7 @@ func TestRecallHonorsLimit(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/a"), "memory:b", "종목 둘")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:c", "/work/a"), "memory:c", "종목 셋")
 
-	server := mcp.NewServer(memory.NewRecaller(memories))
+	server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 
 	out, err := server.Recall(ctx, mcp.RecallInput{Query: "종목", Limit: 2})
 	if err != nil {
@@ -118,7 +118,7 @@ func TestRecallEmptyQueryErrors(t *testing.T) {
 	_, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
 	defer closeStores()
 
-	server := mcp.NewServer(memory.NewRecaller(memories))
+	server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 
 	if _, err := server.Recall(ctx, mcp.RecallInput{Query: ""}); err == nil {
 		t.Fatal("empty query returned no error, want an error")
@@ -127,7 +127,7 @@ func TestRecallEmptyQueryErrors(t *testing.T) {
 
 // --- store-backed test helpers (mirror internal/memory test setup) ---
 
-func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, *memory.Store, func()) {
+func openStores(ctx context.Context, t *testing.T, path string) (*sourcespkg.Store, *memoriespkg.Store, func()) {
 	t.Helper()
 	tok, err := tokenize.NewKorean()
 	if err != nil {
@@ -136,7 +136,7 @@ func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, 
 	return openStoresWith(ctx, t, path, tok)
 }
 
-func openStoresWith(ctx context.Context, t *testing.T, path string, tok memory.Tokenizer) (*source.Store, *memory.Store, func()) {
+func openStoresWith(ctx context.Context, t *testing.T, path string, tok memoriespkg.Tokenizer) (*sourcespkg.Store, *memoriespkg.Store, func()) {
 	t.Helper()
 	db, err := storage.OpenSQLite(path)
 	if err != nil {
@@ -145,7 +145,7 @@ func openStoresWith(ctx context.Context, t *testing.T, path string, tok memory.T
 	if err := migrate.Apply(ctx, db, path); err != nil {
 		t.Fatal(err)
 	}
-	return source.NewStore(db), memory.NewStore(db, tok), closeDB(t, db)
+	return sourcespkg.NewStore(db), memoriespkg.NewStore(db, tok), closeDB(t, db)
 }
 
 func closeDB(t *testing.T, db *bun.DB) func() {
@@ -156,27 +156,27 @@ func closeDB(t *testing.T, db *bun.DB) func() {
 	}
 }
 
-func scopedSource(id source.SourceID, scope string) source.Source {
-	return source.Source{
+func scopedSource(id sourcespkg.SourceID, scope string) sourcespkg.Source {
+	return sourcespkg.Source{
 		ID:            id,
-		Kind:          source.SourceKindCodexSession,
+		Kind:          sourcespkg.SourceKindCodexSession,
 		URI:           "memory://test/" + string(id),
 		ContentSHA256: "hash-" + string(id),
-		Scope:         source.Scope{Kind: source.ScopeKindWorkspace, Value: scope},
-		RecordedAt:    time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		Scope:         sourcespkg.Scope{Kind: sourcespkg.ScopeKindWorkspace, Value: scope},
+		ImportedAt:    time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
 		MetadataJSON:  json.RawMessage(`{}`),
 	}
 }
 
-func recordMemory(ctx context.Context, t *testing.T, sources *source.Store, memories *memory.Store, src source.Source, memID, text string) {
+func recordMemory(ctx context.Context, t *testing.T, sources *sourcespkg.Store, memories *memoriespkg.Store, src sourcespkg.Source, memID, text string) {
 	t.Helper()
-	if err := sources.RecordSource(ctx, src, nil); err != nil {
+	if err := sources.SaveSource(ctx, src, nil); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
-	mem := memory.Memory{ID: memory.MemoryID(memID), Agent: "t", Kind: memory.MemoryKindSummary, Text: text, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
-	link := memory.Link{SourceID: src.ID, MemoryID: mem.ID, Kind: memory.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
-	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memory.Memory{mem}, []memory.Link{link}); err != nil {
+	mem := memoriespkg.Memory{ID: memoriespkg.MemoryID(memID), Agent: "t", Kind: memoriespkg.MemoryKindSummary, Text: text, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+	link := memoriespkg.Link{SourceID: src.ID, MemoryID: mem.ID, Kind: memoriespkg.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{mem}, []memoriespkg.Link{link}); err != nil {
 		t.Fatal(err)
 	}
 }

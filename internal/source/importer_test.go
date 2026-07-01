@@ -1,4 +1,4 @@
-package source_test
+package sources_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/junghwan16/gieok/internal/migrate"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 )
 
@@ -30,7 +30,7 @@ func TestImporterReadCodexSessionMakesSourceRecallable(t *testing.T) {
 	store, closeStore := openStore(ctx, t, dbPath)
 	defer closeStore()
 
-	src, err := source.NewImporter(store, nil).Read(ctx, sessionPath, now)
+	src, err := sourcespkg.NewImporter(store, nil).Read(ctx, sessionPath, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,20 +38,20 @@ func TestImporterReadCodexSessionMakesSourceRecallable(t *testing.T) {
 	if src.ID == "" {
 		t.Fatal("source ID is empty")
 	}
-	if src.Kind != source.SourceKindCodexSession {
-		t.Fatalf("source kind = %q, want %q", src.Kind, source.SourceKindCodexSession)
+	if src.Kind != sourcespkg.SourceKindCodexSession {
+		t.Fatalf("source kind = %q, want %q", src.Kind, sourcespkg.SourceKindCodexSession)
 	}
 	if src.URI != sessionPath {
 		t.Fatalf("source URI = %q, want %q", src.URI, sessionPath)
 	}
-	if src.Scope.Kind != source.ScopeKindWorkspace {
-		t.Fatalf("source scope kind = %q, want %q", src.Scope.Kind, source.ScopeKindWorkspace)
+	if src.Scope.Kind != sourcespkg.ScopeKindWorkspace {
+		t.Fatalf("source scope kind = %q, want %q", src.Scope.Kind, sourcespkg.ScopeKindWorkspace)
 	}
 	if src.Scope.Value != "/work/project" {
 		t.Fatalf("source scope value = %q, want /work/project", src.Scope.Value)
 	}
-	if !src.RecordedAt.Equal(now) {
-		t.Fatalf("source recorded at = %s, want %s", src.RecordedAt, now)
+	if !src.ImportedAt.Equal(now) {
+		t.Fatalf("source imported at = %s, want %s", src.ImportedAt, now)
 	}
 	if got, want := src.StartedAt, time.Date(2026, 6, 30, 1, 38, 24, 5_000_000, time.UTC); !got.Equal(want) {
 		t.Fatalf("source started at = %s, want %s", got, want)
@@ -108,12 +108,12 @@ func TestImporterReadClaudeCodeSessionMakesSourceRecallable(t *testing.T) {
 	store, closeStore := openStore(ctx, t, dbPath)
 	defer closeStore()
 
-	src, err := source.NewImporter(store, nil).Read(ctx, sessionPath, now)
+	src, err := sourcespkg.NewImporter(store, nil).Read(ctx, sessionPath, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if src.Kind != source.SourceKindClaudeCodeSession {
-		t.Fatalf("source kind = %q, want %q", src.Kind, source.SourceKindClaudeCodeSession)
+	if src.Kind != sourcespkg.SourceKindClaudeCodeSession {
+		t.Fatalf("source kind = %q, want %q", src.Kind, sourcespkg.SourceKindClaudeCodeSession)
 	}
 	if src.Scope.Value != "/work/claude" {
 		t.Fatalf("source scope value = %q, want /work/claude", src.Scope.Value)
@@ -162,7 +162,7 @@ func TestImporterImportSkipsUnsupportedFilesInDirectory(t *testing.T) {
 	store, closeStore := openStore(ctx, t, dbPath)
 	defer closeStore()
 
-	result, err := source.NewImporter(store, nil).Import(ctx, sessionsDir, now)
+	result, err := sourcespkg.NewImporter(store, nil).Import(ctx, sessionsDir, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func writeFile(t *testing.T, path string, content string) {
 	}
 }
 
-func openStore(ctx context.Context, t *testing.T, path string) (*source.Store, func()) {
+func openStore(ctx context.Context, t *testing.T, path string) (*sourcespkg.Store, func()) {
 	t.Helper()
 	db, err := storage.OpenSQLite(path)
 	if err != nil {
@@ -196,7 +196,7 @@ func openStore(ctx context.Context, t *testing.T, path string) (*source.Store, f
 		}
 		t.Fatal(err)
 	}
-	return source.NewStore(db), func() {
+	return sourcespkg.NewStore(db), func() {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}

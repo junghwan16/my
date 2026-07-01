@@ -1,4 +1,4 @@
-package memory
+package memories
 
 import (
 	"context"
@@ -14,18 +14,18 @@ const rrfK = 60
 // hybridOverfetch is how many results each ranker contributes to the fusion
 // pool before the fused list is truncated to the caller's limit. Fetching a
 // wider slice per engine gives RRF more overlap to work with, so a memory that
-// sits mid-list in both rankers can still surface above one that is #1 in only
-// one — the whole point of fusion.
+// sits mid-list in both rankers can still rank above one that is #1 in only one
+// ranker.
 const hybridOverfetch = 50
 
-// HybridRecollections recalls memory by fusing the lexical (FTS5/BM25) and
+// HybridRecallResults recalls memory by fusing the lexical (FTS5/BM25) and
 // semantic (embedding cosine) rankings with Reciprocal Rank Fusion, then
 // attaches each memory's Source context. It calls SearchMemories and
 // SearchSemantic unchanged and merges their outputs by memory ID, so callers
-// get one hybrid-ranked list behind the same Recollection contract. When no
+// get one hybrid-ranked list behind the same RecallResult contract. When no
 // embedder is attached the semantic list is empty and the result degrades to
 // pure lexical order. Scope and limit follow SearchMemories.
-func (s *Store) HybridRecollections(ctx context.Context, query, scope string, limit int) ([]Recollection, error) {
+func (s *Store) HybridRecallResults(ctx context.Context, query, scope string, limit int) ([]RecallResult, error) {
 	if limit <= 0 {
 		limit = defaultSearchLimit
 	}
@@ -52,7 +52,7 @@ func (s *Store) HybridRecollections(ctx context.Context, query, scope string, li
 // Reciprocal Rank Fusion: each memory scores Σ 1/(rrfK + rank_i) over the lists
 // that contain it (rank is 1-based per list), so a memory strong in either
 // ranker rises even when weak in the other. Ties break deterministically by
-// newest CreatedAt then MemoryID, matching the semantic ranker's tie-break. The
+// newest CreatedAt then MemoryID, matching the semantic ranker's tie behavior. The
 // result is truncated to limit. A memory absent from every list never appears.
 func fuseRRF(lists [][]Memory, limit int) []Memory {
 	scores := make(map[MemoryID]float64)

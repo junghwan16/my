@@ -7,13 +7,13 @@
 # time.
 #
 # Format (kagome-dict UserDict, 4 comma-separated columns):
-#   surface,segmentation,reading,POS
-# - surface:      the term as it appears in text
-# - segmentation: space-separated sub-tokens; use the surface itself to keep it whole
+#   term,segmentation,reading,POS
+# - term:         the word as it appears in text
+# - segmentation: space-separated sub-tokens; use the term itself to keep it whole
 # - reading:      space-separated readings, one per segmentation token (same count)
 # - POS:          part-of-speech tag; 명사 (noun) for these terms
 #
-# Keep this list small and extensible: add a term surfaced by dogfooding when
+# Keep this list small and extensible: add a term found during real use when
 # Kagome splits it into meaningless fragments.
 마이그레이션,마이그레이션,마이그레이션,명사
 임베딩,임베딩,임베딩,명사

@@ -1,4 +1,4 @@
-package source
+package sources
 
 import (
 	"encoding/json"
@@ -31,7 +31,7 @@ type Scope struct {
 }
 
 // Source stores file-level metadata for an imported session. It is immutable
-// once recorded; corrections arrive as later Sources or as Memory.
+// once saved; corrections arrive as later Sources or as Memory.
 type Source struct {
 	ID            SourceID        `json:"id"`
 	Kind          SourceKind      `json:"kind"`
@@ -40,7 +40,7 @@ type Source struct {
 	Scope         Scope           `json:"scope"`
 	StartedAt     time.Time       `json:"started_at,omitempty"`
 	EndedAt       time.Time       `json:"ended_at,omitempty"`
-	RecordedAt    time.Time       `json:"recorded_at"`
+	ImportedAt    time.Time       `json:"imported_at"`
 	MetadataJSON  json.RawMessage `json:"metadata_json"`
 }
 

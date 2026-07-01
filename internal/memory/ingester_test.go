@@ -1,4 +1,4 @@
-package memory_test
+package memories_test
 
 import (
 	"context"
@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 	"github.com/junghwan16/gieok/internal/migrate"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 )
 
 // TestIngestReflectsLateSessionContent is the #7 regression: a keyword that
 // appears only late in a session (well past the old 40-event leading window)
-// must reach Memory and be recallable. The prompt-echoing agent surfaces the
+// must reach Memory and be recallable. The prompt-echoing agent stores the
 // bounded prompt as a single summary Memory, so if the late keyword is missing
 // from the prompt it is unrecallable — proving whether the sampler spans the
 // whole session.
@@ -33,13 +33,13 @@ func TestIngestReflectsLateSessionContent(t *testing.T) {
 	const lateKeyword = "zzlatekeyword"
 	const eventCount = 100
 	const lateIndex = eventCount - 1 // the final event, far past the old 40-event window
-	events := make([]source.SourceEvent, eventCount)
+	events := make([]sourcespkg.SourceEvent, eventCount)
 	for i := range events {
 		text := fmt.Sprintf("event number %d filler discussion", i)
 		if i == lateIndex {
 			text = "we discussed " + lateKeyword + " near the end"
 		}
-		events[i] = source.SourceEvent{
+		events[i] = sourcespkg.SourceEvent{
 			SourceID:    src.ID,
 			Index:       i,
 			Line:        i + 1,
@@ -50,17 +50,17 @@ func TestIngestReflectsLateSessionContent(t *testing.T) {
 			RawJSON:     json.RawMessage(`{}`),
 		}
 	}
-	if err := sources.RecordSource(ctx, src, events); err != nil {
+	if err := sources.SaveSource(ctx, src, events); err != nil {
 		t.Fatal(err)
 	}
 
 	agent := promptEchoAgent(t, "echo")
-	if _, err := memory.NewIngester(sources, memories, []memory.Agent{agent}, nil).
-		Ingest(ctx, memory.IngestOptions{}, time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)); err != nil {
+	if _, err := memoriespkg.NewIngester(sources, memories, []memoriespkg.Agent{agent}, nil).
+		Ingest(ctx, memoriespkg.IngestOptions{}, time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := memory.NewRecaller(memories).Search(ctx, lateKeyword, "", 10)
+	got, err := memoriespkg.NewRecaller(memories).Search(ctx, lateKeyword, "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,13 +75,13 @@ func TestIngestReflectsLateSessionContent(t *testing.T) {
 // promptEchoAgent returns a CommandAgent whose command echoes the ingest prompt
 // it receives (the prompt is the last CLI argument), so the prompt's content
 // becomes a single summary Memory the test can recall against.
-func promptEchoAgent(t *testing.T, name string) memory.Agent {
+func promptEchoAgent(t *testing.T, name string) memoriespkg.Agent {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name+".sh")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s' \"$1\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return memory.NewCommandAgent(name, path)
+	return memoriespkg.NewCommandAgent(name, path)
 }
 
 func TestIngestSourcesRunsAgentsInParallelAndLinksMemories(t *testing.T) {
@@ -92,19 +92,19 @@ func TestIngestSourcesRunsAgentsInParallelAndLinksMemories(t *testing.T) {
 	sources, memories, closeStores := openStores(ctx, t, filepath.Join(dir, "memory.db"))
 	defer closeStores()
 
-	src := source.Source{
+	src := sourcespkg.Source{
 		ID:            "codex_session:test",
-		Kind:          source.SourceKindCodexSession,
+		Kind:          sourcespkg.SourceKindCodexSession,
 		URI:           "memory://test/source",
 		ContentSHA256: "hash",
-		Scope: source.Scope{
-			Kind:  source.ScopeKindWorkspace,
+		Scope: sourcespkg.Scope{
+			Kind:  sourcespkg.ScopeKindWorkspace,
 			Value: "/work/project",
 		},
-		RecordedAt:   time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		ImportedAt:   time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
 		MetadataJSON: json.RawMessage(`{}`),
 	}
-	events := []source.SourceEvent{{
+	events := []sourcespkg.SourceEvent{{
 		SourceID:    src.ID,
 		Index:       0,
 		Line:        1,
@@ -114,21 +114,21 @@ func TestIngestSourcesRunsAgentsInParallelAndLinksMemories(t *testing.T) {
 		PayloadJSON: json.RawMessage(`{"text":"build ingest"}`),
 		RawJSON:     json.RawMessage(`{"type":"response_item"}`),
 	}}
-	if err := sources.RecordSource(ctx, src, events); err != nil {
+	if err := sources.SaveSource(ctx, src, events); err != nil {
 		t.Fatal(err)
 	}
 
 	started := make(chan string, 2)
 	release := make(chan struct{})
-	agents := []memory.Agent{
+	agents := []memoriespkg.Agent{
 		blockingAgent{name: "claude", started: started, release: release},
 		blockingAgent{name: "codex", started: started, release: release},
 	}
 
 	resultCh := make(chan ingestResult, 1)
 	go func() {
-		result, err := memory.NewIngester(sources, memories, agents, nil).
-			Ingest(ctx, memory.IngestOptions{}, time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC))
+		result, err := memoriespkg.NewIngester(sources, memories, agents, nil).
+			Ingest(ctx, memoriespkg.IngestOptions{}, time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC))
 		resultCh <- ingestResult{result: result, err: err}
 	}()
 
@@ -157,8 +157,8 @@ func TestIngestSourcesRunsAgentsInParallelAndLinksMemories(t *testing.T) {
 		t.Fatalf("started agents = %#v, want claude and codex", seen)
 	}
 
-	recaller := memory.NewRecaller(memories)
-	recalled, err := recaller.Recall(ctx, src.ID)
+	recaller := memoriespkg.NewRecaller(memories)
+	recalled, err := recaller.SourceMemories(ctx, src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,16 +183,16 @@ func TestIngestSourcesWithOptionsFiltersSources(t *testing.T) {
 
 	first := testSource("codex_session:first", "first")
 	second := testSource("codex_session:second", "second")
-	if err := sources.RecordSource(ctx, first, nil); err != nil {
+	if err := sources.SaveSource(ctx, first, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := sources.RecordSource(ctx, second, nil); err != nil {
+	if err := sources.SaveSource(ctx, second, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := memory.NewIngester(sources, memories, []memory.Agent{staticAgent{name: "fake"}}, nil).
-		Ingest(ctx, memory.IngestOptions{
-			SourceIDs: []source.SourceID{second.ID},
+	result, err := memoriespkg.NewIngester(sources, memories, []memoriespkg.Agent{staticAgent{name: "fake"}}, nil).
+		Ingest(ctx, memoriespkg.IngestOptions{
+			SourceIDs: []sourcespkg.SourceID{second.ID},
 			Limit:     1,
 		}, time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC))
 	if err != nil {
@@ -202,8 +202,8 @@ func TestIngestSourcesWithOptionsFiltersSources(t *testing.T) {
 		t.Fatalf("ingested sources = %d, want 1", result.Sources)
 	}
 
-	recaller := memory.NewRecaller(memories)
-	firstMemories, err := recaller.Recall(ctx, first.ID)
+	recaller := memoriespkg.NewRecaller(memories)
+	firstMemories, err := recaller.SourceMemories(ctx, first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestIngestSourcesWithOptionsFiltersSources(t *testing.T) {
 		t.Fatalf("first source memories length = %d, want 0", len(firstMemories))
 	}
 
-	secondMemories, err := recaller.Recall(ctx, second.ID)
+	secondMemories, err := recaller.SourceMemories(ctx, second.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,14 +227,14 @@ func TestIngestSourcesStoresSuccessfulOutputWhenAnAgentFails(t *testing.T) {
 	defer closeStores()
 
 	src := testSource("codex_session:test", "test")
-	if err := sources.RecordSource(ctx, src, nil); err != nil {
+	if err := sources.SaveSource(ctx, src, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := memory.NewIngester(sources, memories, []memory.Agent{
+	result, err := memoriespkg.NewIngester(sources, memories, []memoriespkg.Agent{
 		staticAgent{name: "ok"},
 		failingAgent{name: "pi"},
-	}, nil).Ingest(ctx, memory.IngestOptions{}, time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC))
+	}, nil).Ingest(ctx, memoriespkg.IngestOptions{}, time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestIngestSourcesStoresSuccessfulOutputWhenAnAgentFails(t *testing.T) {
 		t.Fatalf("agent errors = %d, want 1", result.Errors)
 	}
 
-	recalled, err := memory.NewRecaller(memories).Recall(ctx, src.ID)
+	recalled, err := memoriespkg.NewRecaller(memories).SourceMemories(ctx, src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,26 +261,26 @@ func TestIngestReplacesStaleAgentMemoriesOnReingest(t *testing.T) {
 	defer closeStores()
 
 	src := testSource("codex_session:test", "test")
-	if err := sources.RecordSource(ctx, src, nil); err != nil {
+	if err := sources.SaveSource(ctx, src, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
-	if _, err := memory.NewIngester(sources, memories, []memory.Agent{staticAgent{name: "x", text: "v1"}}, nil).
-		Ingest(ctx, memory.IngestOptions{}, now); err != nil {
+	if _, err := memoriespkg.NewIngester(sources, memories, []memoriespkg.Agent{staticAgent{name: "x", text: "v1"}}, nil).
+		Ingest(ctx, memoriespkg.IngestOptions{}, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.NewIngester(sources, memories, []memory.Agent{staticAgent{name: "x", text: "v2"}}, nil).
-		Ingest(ctx, memory.IngestOptions{}, now); err != nil {
+	if _, err := memoriespkg.NewIngester(sources, memories, []memoriespkg.Agent{staticAgent{name: "x", text: "v2"}}, nil).
+		Ingest(ctx, memoriespkg.IngestOptions{}, now); err != nil {
 		t.Fatal(err)
 	}
 
-	recalled, err := memory.NewRecaller(memories).Recall(ctx, src.ID)
+	recalled, err := memoriespkg.NewRecaller(memories).SourceMemories(ctx, src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(recalled) != 1 {
-		t.Fatalf("source memories length = %d, want 1 (stale memory not replaced)", len(recalled))
+		t.Fatalf("source memories length = %d, want 1 (old memory not replaced)", len(recalled))
 	}
 	if recalled[0].Text != "v2" {
 		t.Fatalf("memory text = %q, want v2", recalled[0].Text)
@@ -294,19 +294,19 @@ func TestIngestSkipExistingSkipsAlreadyIngestedAgents(t *testing.T) {
 	defer closeStores()
 
 	src := testSource("codex_session:test", "test")
-	if err := sources.RecordSource(ctx, src, nil); err != nil {
+	if err := sources.SaveSource(ctx, src, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
-	if _, err := memory.NewIngester(sources, memories, []memory.Agent{staticAgent{name: "x", text: "v1"}}, nil).
-		Ingest(ctx, memory.IngestOptions{}, now); err != nil {
+	if _, err := memoriespkg.NewIngester(sources, memories, []memoriespkg.Agent{staticAgent{name: "x", text: "v1"}}, nil).
+		Ingest(ctx, memoriespkg.IngestOptions{}, now); err != nil {
 		t.Fatal(err)
 	}
 
 	// The agent named "x" would fail if it ran, so a clean result proves it was skipped.
-	result, err := memory.NewIngester(sources, memories, []memory.Agent{failingAgent{name: "x"}}, nil).
-		Ingest(ctx, memory.IngestOptions{SkipExisting: true}, now)
+	result, err := memoriespkg.NewIngester(sources, memories, []memoriespkg.Agent{failingAgent{name: "x"}}, nil).
+		Ingest(ctx, memoriespkg.IngestOptions{SkipExisting: true}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestIngestSkipExistingSkipsAlreadyIngestedAgents(t *testing.T) {
 		t.Fatalf("agent errors = %d, want 0 (agent should be skipped)", result.Errors)
 	}
 
-	recalled, err := memory.NewRecaller(memories).Recall(ctx, src.ID)
+	recalled, err := memoriespkg.NewRecaller(memories).SourceMemories(ctx, src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestIngestPassesRelatedMemoryFromSameScopeExcludingOwnSource(t *testing.T) 
 	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
 
 	seedSrc := scopedSource("codex_session:seed", "/work/project")
-	if err := sources.RecordSource(ctx, seedSrc, []source.SourceEvent{{
+	if err := sources.SaveSource(ctx, seedSrc, []sourcespkg.SourceEvent{{
 		SourceID:    seedSrc.ID,
 		Index:       0,
 		Line:        1,
@@ -353,16 +353,16 @@ func TestIngestPassesRelatedMemoryFromSameScopeExcludingOwnSource(t *testing.T) 
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.NewIngester(
-		sources, memories, []memory.Agent{staticAgent{name: "seed", text: "seed memory about " + sharedKeyword}}, nil,
-	).Ingest(ctx, memory.IngestOptions{SourceIDs: []source.SourceID{seedSrc.ID}}, now); err != nil {
+	if _, err := memoriespkg.NewIngester(
+		sources, memories, []memoriespkg.Agent{staticAgent{name: "seed", text: "seed memory about " + sharedKeyword}}, nil,
+	).Ingest(ctx, memoriespkg.IngestOptions{SourceIDs: []sourcespkg.SourceID{seedSrc.ID}}, now); err != nil {
 		t.Fatal(err)
 	}
 
-	// A different scope also mentions the keyword; it must not surface as
+	// A different scope also mentions the keyword; it must not appear as
 	// related for a source ingested under /work/project.
 	otherScopeSrc := scopedSource("codex_session:other-scope", "/work/other")
-	if err := sources.RecordSource(ctx, otherScopeSrc, []source.SourceEvent{{
+	if err := sources.SaveSource(ctx, otherScopeSrc, []sourcespkg.SourceEvent{{
 		SourceID:    otherScopeSrc.ID,
 		Index:       0,
 		Line:        1,
@@ -374,14 +374,14 @@ func TestIngestPassesRelatedMemoryFromSameScopeExcludingOwnSource(t *testing.T) 
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.NewIngester(
-		sources, memories, []memory.Agent{staticAgent{name: "seed", text: "unrelated other-scope memory about " + sharedKeyword}}, nil,
-	).Ingest(ctx, memory.IngestOptions{SourceIDs: []source.SourceID{otherScopeSrc.ID}}, now); err != nil {
+	if _, err := memoriespkg.NewIngester(
+		sources, memories, []memoriespkg.Agent{staticAgent{name: "seed", text: "unrelated other-scope memory about " + sharedKeyword}}, nil,
+	).Ingest(ctx, memoriespkg.IngestOptions{SourceIDs: []sourcespkg.SourceID{otherScopeSrc.ID}}, now); err != nil {
 		t.Fatal(err)
 	}
 
 	newSrc := scopedSource("codex_session:new", "/work/project")
-	if err := sources.RecordSource(ctx, newSrc, []source.SourceEvent{{
+	if err := sources.SaveSource(ctx, newSrc, []sourcespkg.SourceEvent{{
 		SourceID:    newSrc.ID,
 		Index:       0,
 		Line:        1,
@@ -394,14 +394,14 @@ func TestIngestPassesRelatedMemoryFromSameScopeExcludingOwnSource(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	captured := make(chan memory.AgentInput, 1)
-	if _, err := memory.NewIngester(
-		sources, memories, []memory.Agent{capturingAgent{name: "cap", inputs: captured}}, nil,
-	).Ingest(ctx, memory.IngestOptions{SourceIDs: []source.SourceID{newSrc.ID}}, now); err != nil {
+	captured := make(chan memoriespkg.AgentInput, 1)
+	if _, err := memoriespkg.NewIngester(
+		sources, memories, []memoriespkg.Agent{capturingAgent{name: "cap", inputs: captured}}, nil,
+	).Ingest(ctx, memoriespkg.IngestOptions{SourceIDs: []sourcespkg.SourceID{newSrc.ID}}, now); err != nil {
 		t.Fatal(err)
 	}
 
-	var input memory.AgentInput
+	var input memoriespkg.AgentInput
 	select {
 	case input = <-captured:
 	default:
@@ -417,10 +417,10 @@ func TestIngestPassesRelatedMemoryFromSameScopeExcludingOwnSource(t *testing.T) 
 
 	// Re-ingesting the seed source with a second agent must not see its own
 	// prior memory reflected back as "related" — that would just be a self-echo.
-	captured2 := make(chan memory.AgentInput, 1)
-	if _, err := memory.NewIngester(
-		sources, memories, []memory.Agent{capturingAgent{name: "cap2", inputs: captured2}}, nil,
-	).Ingest(ctx, memory.IngestOptions{SourceIDs: []source.SourceID{seedSrc.ID}}, now); err != nil {
+	captured2 := make(chan memoriespkg.AgentInput, 1)
+	if _, err := memoriespkg.NewIngester(
+		sources, memories, []memoriespkg.Agent{capturingAgent{name: "cap2", inputs: captured2}}, nil,
+	).Ingest(ctx, memoriespkg.IngestOptions{SourceIDs: []sourcespkg.SourceID{seedSrc.ID}}, now); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -439,26 +439,26 @@ func TestIngestPassesRelatedMemoryFromSameScopeExcludingOwnSource(t *testing.T) 
 // what ingest computed (such as RelatedMemories) rather than on agent output.
 type capturingAgent struct {
 	name   string
-	inputs chan<- memory.AgentInput
+	inputs chan<- memoriespkg.AgentInput
 }
 
 func (a capturingAgent) Name() string {
 	return a.name
 }
 
-func (a capturingAgent) Ingest(_ context.Context, input memory.AgentInput) (memory.AgentOutput, error) {
+func (a capturingAgent) Ingest(_ context.Context, input memoriespkg.AgentInput) (memoriespkg.AgentOutput, error) {
 	a.inputs <- input
-	return memory.AgentOutput{
-		Memories: []memory.AgentMemory{{Kind: memory.MemoryKindSummary, Text: a.name + " summary"}},
+	return memoriespkg.AgentOutput{
+		Memories: []memoriespkg.AgentMemory{{Kind: memoriespkg.MemoryKindSummary, Text: a.name + " summary"}},
 	}, nil
 }
 
-func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, *memory.Store, func()) {
+func openStores(ctx context.Context, t *testing.T, path string) (*sourcespkg.Store, *memoriespkg.Store, func()) {
 	t.Helper()
 	return openStoresWith(ctx, t, path, spaceTokenizer{})
 }
 
-func openStoresWith(ctx context.Context, t *testing.T, path string, tok memory.Tokenizer) (*source.Store, *memory.Store, func()) {
+func openStoresWith(ctx context.Context, t *testing.T, path string, tok memoriespkg.Tokenizer) (*sourcespkg.Store, *memoriespkg.Store, func()) {
 	t.Helper()
 	db, err := storage.OpenSQLite(path)
 	if err != nil {
@@ -473,7 +473,7 @@ func openStoresWith(ctx context.Context, t *testing.T, path string, tok memory.T
 		closeStore()
 		t.Fatal(err)
 	}
-	return source.NewStore(db), memory.NewStore(db, tok), closeStore
+	return sourcespkg.NewStore(db), memoriespkg.NewStore(db, tok), closeStore
 }
 
 // spaceTokenizer is a deterministic whitespace tokenizer for behavior tests. It
@@ -486,21 +486,21 @@ func (spaceTokenizer) Tokenize(text string) []string {
 }
 
 type ingestResult struct {
-	result memory.IngestResult
+	result memoriespkg.IngestResult
 	err    error
 }
 
-func testSource(id source.SourceID, text string) source.Source {
-	return source.Source{
+func testSource(id sourcespkg.SourceID, text string) sourcespkg.Source {
+	return sourcespkg.Source{
 		ID:            id,
-		Kind:          source.SourceKindCodexSession,
+		Kind:          sourcespkg.SourceKindCodexSession,
 		URI:           "memory://test/" + text,
 		ContentSHA256: "hash-" + text,
-		Scope: source.Scope{
-			Kind:  source.ScopeKindWorkspace,
+		Scope: sourcespkg.Scope{
+			Kind:  sourcespkg.ScopeKindWorkspace,
 			Value: "/work/project",
 		},
-		RecordedAt:   time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		ImportedAt:   time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
 		MetadataJSON: json.RawMessage(`{}`),
 	}
 }
@@ -514,14 +514,14 @@ func (a staticAgent) Name() string {
 	return a.name
 }
 
-func (a staticAgent) Ingest(context.Context, memory.AgentInput) (memory.AgentOutput, error) {
+func (a staticAgent) Ingest(context.Context, memoriespkg.AgentInput) (memoriespkg.AgentOutput, error) {
 	text := a.text
 	if text == "" {
 		text = "static summary"
 	}
-	return memory.AgentOutput{
-		Memories: []memory.AgentMemory{{
-			Kind: memory.MemoryKindSummary,
+	return memoriespkg.AgentOutput{
+		Memories: []memoriespkg.AgentMemory{{
+			Kind: memoriespkg.MemoryKindSummary,
 			Text: text,
 		}},
 	}, nil
@@ -535,8 +535,8 @@ func (a failingAgent) Name() string {
 	return a.name
 }
 
-func (a failingAgent) Ingest(context.Context, memory.AgentInput) (memory.AgentOutput, error) {
-	return memory.AgentOutput{}, assertAnError{}
+func (a failingAgent) Ingest(context.Context, memoriespkg.AgentInput) (memoriespkg.AgentOutput, error) {
+	return memoriespkg.AgentOutput{}, assertAnError{}
 }
 
 type assertAnError struct{}
@@ -555,22 +555,22 @@ func (a blockingAgent) Name() string {
 	return a.name
 }
 
-func (a blockingAgent) Ingest(ctx context.Context, input memory.AgentInput) (memory.AgentOutput, error) {
+func (a blockingAgent) Ingest(ctx context.Context, input memoriespkg.AgentInput) (memoriespkg.AgentOutput, error) {
 	select {
 	case a.started <- a.name:
 	case <-ctx.Done():
-		return memory.AgentOutput{}, ctx.Err()
+		return memoriespkg.AgentOutput{}, ctx.Err()
 	}
 
 	select {
 	case <-a.release:
 	case <-ctx.Done():
-		return memory.AgentOutput{}, ctx.Err()
+		return memoriespkg.AgentOutput{}, ctx.Err()
 	}
 
-	return memory.AgentOutput{
-		Memories: []memory.AgentMemory{{
-			Kind: memory.MemoryKindSummary,
+	return memoriespkg.AgentOutput{
+		Memories: []memoriespkg.AgentMemory{{
+			Kind: memoriespkg.MemoryKindSummary,
 			Text: a.name + " summary for " + string(input.Source.ID),
 		}},
 	}, nil

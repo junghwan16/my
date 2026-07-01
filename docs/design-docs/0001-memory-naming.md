@@ -2,25 +2,30 @@
 status: accepted
 ---
 
-# 영속 메모리 단위의 코드 타입명은 도메인 언어에 맞춰 `Memory` 로 한다
+# 재사용할 기억의 코드 타입명은 `Memory`, 패키지명은 `memories` 로 한다
 
-CONTEXT.md 의 ubiquitous language 는 curated unit 을 **Memory** 라고 부른다. 이 타입은
-`memory` 패키지 안에 살기 때문에 외부에서 `memory.Memory` / `memory.MemoryID` 로 보이며
-Google Go style guide 가 지적하는 package stutter 가 생긴다. 그럼에도 코드 심볼(`Memory`,
-`MemoryID`, `MemoryKind`)을 glossary 와 1:1 로 맞추는 쪽을 택한다. 문서·이슈·코드가 같은
-단어를 쓰는 편이, stutter 를 피하려고 `Item` 같은 별도 용어를 두는 것보다 탐색·이해 비용이 낮다.
+CONTEXT.md 는 Source에서 뽑아낸 재사용 가능한 지식을 **Memory(기억)** 라고 부른다.
+그래서 코드에서도 같은 단어를 쓴다. 타입명은 `Memory`, `MemoryID`, `MemoryKind` 를
+유지한다.
+
+다만 Go lint의 stuttering 규칙도 유지한다. 패키지명은 `memory` 가 아니라 `memories` 로
+두어 바깥에서는 `memories.Memory`, `memories.MemoryID` 처럼 읽히게 한다. 같은 이유로
+Source 패키지는 `sources` 로 둔다. 디렉터리 경로는 기존 import path를 유지하되, Go
+패키지 이름만 plural로 둔다.
 
 ## Consequences
 
-- revive 의 `exported` stutter 검사는 이 컨벤션과 근본적으로 충돌하므로
-  `.golangci.yml` 에서 `disableStutteringCheck` 로 끈다. (`Memory` 계열만이 아니라
-  프로젝트 전반이 도메인 정렬 명명을 따르기로 한 결정의 일부다.)
+- `.golangci.yml` 에서 revive `exported`의 stuttering check를 끄지 않는다.
 - 타입명은 `SourceID`/`SourceKind`/`ScopeKind`/`LinkKind` 와 동일한 `<Domain><Suffix>`
   패턴을 유지한다. 그래서 `MemoryID`/`MemoryKind` 이며, revive 가 제안하는 `ID`/`Kind` 로
   줄이지 않는다 — 그 축약은 오히려 기존 타입들과의 대칭을 깬다.
+- import alias가 필요한 호출부는 `memoriespkg`/`sourcespkg` 처럼 명시해 로컬 store 변수와
+  패키지 qualifier가 충돌하지 않게 한다.
 
 ## Considered options
 
-- **`Memory` (선택)** — glossary 와 정렬. stutter 는 lint 설정으로 흡수.
-- **`Item` 유지 (거절)** — stutter 는 없지만 문서의 "Memory" 와 코드의 "Item" 이 어긋나
+- **`memories.Memory` (선택)** — 제품 언어를 유지하면서 revive stuttering check도 통과.
+- **`memory.Memory` + lint disable (거절)** — 이름은 자연스럽지만 golangci 설정이 실제
+  중복 이름을 숨긴다.
+- **`memory.Item` (거절)** — 중복은 없지만 문서의 "Memory" 와 코드의 "Item" 이 어긋나
   독자·에이전트가 매번 번역해야 한다.

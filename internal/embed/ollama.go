@@ -1,8 +1,8 @@
 // Package embed provides the default, pure-Go embedder used for optional
 // semantic recall. It calls a local Ollama HTTP server (no cgo, no SDK — just
-// net/http), so the semantic layer is an optional sidecar: when Ollama is
+// net/http), so the semantic layer is optional: when Ollama is
 // unreachable or the model is missing, construction/health-checks fail and the
-// caller keeps lexical recall. It satisfies memory.Embedder.
+// caller keeps lexical recall. It satisfies memories.Embedder.
 package embed
 
 import (
@@ -15,11 +15,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 )
 
-// Ollama satisfies the memory.Embedder seam.
-var _ memory.Embedder = (*Ollama)(nil)
+// Ollama satisfies memories.Embedder.
+var _ memoriespkg.Embedder = (*Ollama)(nil)
 
 // Defaults target a local Ollama running bge-m3 (dense, 1024-dim). bge-m3 is a
 // strong multilingual (incl. Korean) embedding model that fits comfortably on
@@ -93,7 +93,7 @@ func (o *Ollama) Model() string {
 // Available reports whether the embedder can produce vectors: it performs one
 // real embed to confirm both that Ollama is reachable and that the model is
 // installed. Callers use it to decide whether to attach the embedder, so a
-// missing sidecar disables semantic recall instead of failing every write.
+// missing Ollama disables semantic recall instead of failing every write.
 func (o *Ollama) Available(ctx context.Context) bool {
 	vec, err := o.Embed(ctx, "health check")
 	return err == nil && len(vec) > 0

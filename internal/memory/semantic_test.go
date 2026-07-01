@@ -1,4 +1,4 @@
-package memory_test
+package memories_test
 
 import (
 	"context"
@@ -6,21 +6,21 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 	"github.com/junghwan16/gieok/internal/migrate"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 )
 
 // fakeEmbedder returns deterministic vectors keyed by exact text, so tests
 // control cosine geometry with no Ollama and no network. Unknown text maps to a
 // fixed neutral vector, and an optional failText makes Embed fail once to prove
-// graceful skips.
+// vector writes can be skipped without failing memory writes.
 type fakeEmbedder struct {
-	model    string
-	vectors  map[string][]float32
-	fallback []float32
-	failText string
+	model         string
+	vectors       map[string][]float32
+	defaultVector []float32
+	failText      string
 }
 
 func (f fakeEmbedder) Model() string {
@@ -37,8 +37,8 @@ func (f fakeEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
 	if v, ok := f.vectors[text]; ok {
 		return v, nil
 	}
-	if f.fallback != nil {
-		return f.fallback, nil
+	if f.defaultVector != nil {
+		return f.defaultVector, nil
 	}
 	return []float32{0, 0, 1}, nil
 }
@@ -46,7 +46,7 @@ func (f fakeEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
 var errFakeEmbed = errors.New("fake embed failure")
 
 // openSemanticStores opens stores with an embedder attached for semantic tests.
-func openSemanticStores(ctx context.Context, t *testing.T, emb memory.Embedder) (*source.Store, *memory.Store, func()) {
+func openSemanticStores(ctx context.Context, t *testing.T, emb memoriespkg.Embedder) (*sourcespkg.Store, *memoriespkg.Store, func()) {
 	t.Helper()
 	db, err := storage.OpenSQLite(filepath.Join(t.TempDir(), "m.db"))
 	if err != nil {
@@ -61,8 +61,8 @@ func openSemanticStores(ctx context.Context, t *testing.T, emb memory.Embedder) 
 		closeStore()
 		t.Fatal(err)
 	}
-	memories := memory.NewStore(db, spaceTokenizer{}).WithEmbedder(emb)
-	return source.NewStore(db), memories, closeStore
+	memories := memoriespkg.NewStore(db, spaceTokenizer{}).WithEmbedder(emb)
+	return sourcespkg.NewStore(db), memories, closeStore
 }
 
 // TestSearchSemanticRanksByCosine proves the query embedding closest to memory
@@ -81,7 +81,7 @@ func TestSearchSemanticRanksByCosine(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:apple", "apple text")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/b"), "memory:banana", "banana text")
 
-	got, err := memory.NewRecaller(memories).SearchSemantic(ctx, "query near apple", "", 10)
+	got, err := memoriespkg.NewRecaller(memories).SearchSemantic(ctx, "query near apple", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestSearchSemanticDropsBelowSimilarityFloor(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "schema migration notes")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/a"), "memory:b", "query index tuning")
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 
 	onTopic, err := recaller.SearchSemantic(ctx, "on topic query", "", 10)
 	if err != nil {
@@ -151,7 +151,7 @@ func TestSearchSemanticFloorConfigurable(t *testing.T) {
 	if err = migrate.Apply(ctx, db, "unused"); err != nil {
 		t.Fatal(err)
 	}
-	sources := source.NewStore(db)
+	sources := sourcespkg.NewStore(db)
 
 	emb := fakeEmbedder{vectors: map[string][]float32{
 		// Stored vector is near-orthogonal to the query: cosine well below the
@@ -159,11 +159,11 @@ func TestSearchSemanticFloorConfigurable(t *testing.T) {
 		"weakly related memory": {0, 1, 0},
 		"query":                 {1, 0.2, 0},
 	}}
-	memories := memory.NewStore(db, spaceTokenizer{}).WithEmbedder(emb)
+	memories := memoriespkg.NewStore(db, spaceTokenizer{}).WithEmbedder(emb)
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "weakly related memory")
 
 	// Default floor (0.5) excludes the weakly related memory.
-	got, err := memory.NewRecaller(memories).SearchSemantic(ctx, "query", "", 10)
+	got, err := memoriespkg.NewRecaller(memories).SearchSemantic(ctx, "query", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +172,8 @@ func TestSearchSemanticFloorConfigurable(t *testing.T) {
 	}
 
 	// A floor of -1 admits every candidate, so the same memory is now returned.
-	loose := memory.NewStore(db, spaceTokenizer{}).WithEmbedder(emb).WithMinSimilarity(-1)
-	got, err = memory.NewRecaller(loose).SearchSemantic(ctx, "query", "", 10)
+	loose := memoriespkg.NewStore(db, spaceTokenizer{}).WithEmbedder(emb).WithMinSimilarity(-1)
+	got, err = memoriespkg.NewRecaller(loose).SearchSemantic(ctx, "query", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestSearchSemanticRespectsScopeAndLimit(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/a"), "memory:b", "b")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:c", "/work/other"), "memory:c", "c")
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 
 	scoped, err := recaller.SearchSemantic(ctx, "query", "/work/a", 10)
 	if err != nil {
@@ -221,9 +221,9 @@ func TestSearchSemanticRespectsScopeAndLimit(t *testing.T) {
 	}
 }
 
-// TestSearchSemanticWritesVectorsOnRecord proves memories are embedded on write
+// TestSearchSemanticWritesVectorsOnSave proves memories are embedded on write
 // (a vector row exists so semantic recall finds the memory immediately).
-func TestSearchSemanticWritesVectorsOnRecord(t *testing.T) {
+func TestSearchSemanticWritesVectorsOnSave(t *testing.T) {
 	ctx := context.Background()
 	emb := fakeEmbedder{vectors: map[string][]float32{
 		"hello": {1, 0, 0}, "query": {1, 0, 0},
@@ -233,7 +233,7 @@ func TestSearchSemanticWritesVectorsOnRecord(t *testing.T) {
 
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "hello")
 
-	got, err := memory.NewRecaller(memories).SearchSemantic(ctx, "query", "", 10)
+	got, err := memoriespkg.NewRecaller(memories).SearchSemantic(ctx, "query", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,14 +258,14 @@ func TestEnsureVectorsIndexedBackfills(t *testing.T) {
 	if err = migrate.Apply(ctx, db, "unused"); err != nil {
 		t.Fatal(err)
 	}
-	sources := source.NewStore(db)
+	sources := sourcespkg.NewStore(db)
 
-	// Record with no embedder: no vectors written.
-	plain := memory.NewStore(db, spaceTokenizer{})
+	// Save with no embedder: no vectors written.
+	plain := memoriespkg.NewStore(db, spaceTokenizer{})
 	recordMemory(ctx, t, sources, plain, scopedSource("codex_session:a", "/work/a"), "memory:a", "hello")
 
 	emb := fakeEmbedder{vectors: map[string][]float32{"hello": {1, 0, 0}, "query": {1, 0, 0}}}
-	withEmb := memory.NewStore(db, spaceTokenizer{}).WithEmbedder(emb)
+	withEmb := memoriespkg.NewStore(db, spaceTokenizer{}).WithEmbedder(emb)
 
 	// Before backfill: no vectors, so semantic recall is empty.
 	before, err := withEmb.SearchSemantic(ctx, "query", "", 10)
@@ -291,7 +291,7 @@ func TestSemanticFallbackWhenNoEmbedder(t *testing.T) {
 
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 
 	semantic, err := recaller.SearchSemantic(ctx, "종목", "", 10)
 	if err != nil {
@@ -310,7 +310,7 @@ func TestSemanticFallbackWhenNoEmbedder(t *testing.T) {
 		t.Fatalf("lexical recall = %#v, want single memory:a", lexical)
 	}
 
-	// EnsureVectorsIndexed is a no-op with no embedder.
+	// EnsureVectorsIndexed returns cleanly with no embedder.
 	if err := memories.EnsureVectorsIndexed(ctx); err != nil {
 		t.Fatalf("EnsureVectorsIndexed without embedder errored: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestEmbedFailureSkipsVectorButKeepsMemory(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
 
 	// Memory persisted despite the embed failure.
-	recalled, err := memory.NewRecaller(memories).Recall(ctx, "codex_session:a")
+	recalled, err := memoriespkg.NewRecaller(memories).SourceMemories(ctx, "codex_session:a")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,7 +54,7 @@ func TestEmbedParsesOllamaResponse(t *testing.T) {
 	}
 }
 
-// TestEmbedErrorsOnNon200 proves a non-200 status surfaces as an error so the
+// TestEmbedErrorsOnNon200 proves a non-200 status returns an error so the
 // caller can fall back to lexical recall.
 func TestEmbedErrorsOnNon200(t *testing.T) {
 	ctx := context.Background()
@@ -70,7 +70,7 @@ func TestEmbedErrorsOnNon200(t *testing.T) {
 }
 
 // TestAvailableReportsUnreachable proves Available is false when no server
-// answers, so an absent Ollama sidecar disables semantic recall gracefully.
+// answers, so absent Ollama disables semantic recall without breaking lexical recall.
 func TestAvailableReportsUnreachable(t *testing.T) {
 	ctx := context.Background()
 	// Reserved TEST-NET-1 address with a closed port: connection fails fast.

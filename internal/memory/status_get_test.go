@@ -1,11 +1,11 @@
-package memory_test
+package memories_test
 
 import (
 	"context"
 	"path/filepath"
 	"testing"
 
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 )
 
 func TestStatsCountsMemoriesAndIndexRows(t *testing.T) {
@@ -13,7 +13,7 @@ func TestStatsCountsMemoriesAndIndexRows(t *testing.T) {
 	sources, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
 	defer closeStores()
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 
 	empty, err := recaller.Stats(ctx)
 	if err != nil {
@@ -49,22 +49,22 @@ func TestGetReturnsRecordedMemoryWithSources(t *testing.T) {
 
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "코스피 종목 분석 리포트")
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 
 	got, found, err := recaller.Get(ctx, "memory:a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !found {
-		t.Fatal("get reported not-found for a recorded memory, want found")
+		t.Fatal("get reported not-found for a saved memory, want found")
 	}
 	if got.MemoryID != "memory:a" {
 		t.Fatalf("memory id = %q, want memory:a", got.MemoryID)
 	}
 	if got.Text != "코스피 종목 분석 리포트" {
-		t.Fatalf("text = %q, want the recorded text", got.Text)
+		t.Fatalf("text = %q, want the saved text", got.Text)
 	}
-	if got.Agent != "t" || got.Kind != memory.MemoryKindSummary {
+	if got.Agent != "t" || got.Kind != memoriespkg.MemoryKindSummary {
 		t.Fatalf("agent/kind = %q/%q, want t/summary", got.Agent, got.Kind)
 	}
 	if len(got.Sources) != 1 {
@@ -85,7 +85,7 @@ func TestGetReportsNotFoundForUnknownID(t *testing.T) {
 
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
 
-	got, found, err := memory.NewRecaller(memories).Get(ctx, "memory:missing")
+	got, found, err := memoriespkg.NewRecaller(memories).Get(ctx, "memory:missing")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +93,6 @@ func TestGetReportsNotFoundForUnknownID(t *testing.T) {
 		t.Fatalf("get reported found for an unknown id, want not-found; got %#v", got)
 	}
 	if got.MemoryID != "" {
-		t.Fatalf("not-found recollection = %#v, want zero value", got)
+		t.Fatalf("not-found recall result = %#v, want zero value", got)
 	}
 }

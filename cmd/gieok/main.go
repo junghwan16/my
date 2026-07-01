@@ -16,15 +16,18 @@ import (
 
 	"github.com/junghwan16/gieok/internal/embed"
 	"github.com/junghwan16/gieok/internal/mcp"
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 	"github.com/junghwan16/gieok/internal/migrate"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 	"github.com/junghwan16/gieok/internal/tokenize"
 )
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout, os.Stderr, time.Now().UTC()); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -33,6 +36,9 @@ func main() {
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, now time.Time) error {
 	if len(args) < 1 {
 		return errUsage
+	}
+	if isHelpArg(args[0]) {
+		return writeHelp(stderr, usageTop)
 	}
 
 	switch args[0] {
@@ -45,12 +51,52 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	}
 }
 
+const usageTop = `usage: gieok <memory|mcp>
+
+memory  save session files, build Memory, and recall it
+mcp     expose recall/status/get tools to MCP clients`
+
+const usageMemory = `usage: gieok memory <import|ingest|recall>
+
+import  save Codex/Claude Code session files as Source
+ingest  turn saved Sources into Memory
+recall  find useful Memory for a task or question`
+
 // errUsage is the top-level usage error.
-var errUsage = errors.New("usage: gieok <memory|mcp>")
+var errUsage = errors.New(usageTop)
+
+// errMemoryUsage is the memory command usage error.
+var errMemoryUsage = errors.New(usageMemory)
+
+func isHelpArg(arg string) bool {
+	return arg == "-h" || arg == "--help" || arg == "help"
+}
+
+func writeHelp(w io.Writer, usage string) error {
+	if _, err := fmt.Fprintln(w, usage); err != nil {
+		return fmt.Errorf("write help: %w", err)
+	}
+	return flag.ErrHelp
+}
+
+func setUsage(flags *flag.FlagSet, usage string) {
+	flags.Usage = func() {
+		if _, err := fmt.Fprintln(flags.Output(), usage); err != nil {
+			return
+		}
+		if _, err := fmt.Fprintln(flags.Output()); err != nil {
+			return
+		}
+		flags.PrintDefaults()
+	}
+}
 
 func runMemory(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, now time.Time) error {
 	if len(args) < 2 {
-		return errors.New("usage: gieok memory <import|ingest|recall>")
+		return errMemoryUsage
+	}
+	if isHelpArg(args[1]) {
+		return writeHelp(stderr, usageMemory)
 	}
 
 	switch args[1] {
@@ -61,14 +107,14 @@ func runMemory(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	case "recall":
 		return runMemoryRecall(ctx, args, stdout, stderr)
 	default:
-		return errors.New("usage: gieok memory <import|ingest|recall>")
+		return errMemoryUsage
 	}
 }
 
 // withStores opens the SQLite database, brings its schema up to date through the
 // migration ledger, and hands ready stores to fn, guaranteeing the database is
 // closed afterwards.
-func withStores(ctx context.Context, path string, fn func(*source.Store, *memory.Store) error) (err error) {
+func withStores(ctx context.Context, path string, fn func(*sourcespkg.Store, *memoriespkg.Store) error) (err error) {
 	db, err := storage.OpenSQLite(path)
 	if err != nil {
 		return err
@@ -85,7 +131,7 @@ func withStores(ctx context.Context, path string, fn func(*source.Store, *memory
 	if err != nil {
 		return fmt.Errorf("build korean tokenizer: %w", err)
 	}
-	memories := memory.NewStore(db, tokenizer)
+	memories := memoriespkg.NewStore(db, tokenizer)
 	attachEmbedder(ctx, memories)
 	if err = memories.EnsureFTSIndexed(ctx); err != nil {
 		return err
@@ -93,14 +139,14 @@ func withStores(ctx context.Context, path string, fn func(*source.Store, *memory
 	if err = memories.EnsureVectorsIndexed(ctx); err != nil {
 		return err
 	}
-	return fn(source.NewStore(db), memories)
+	return fn(sourcespkg.NewStore(db), memories)
 }
 
-// attachEmbedder enables semantic recall when a local Ollama sidecar is
+// attachEmbedder enables semantic recall when local Ollama is
 // reachable. It health-checks the default bge-m3 embedder and attaches it only
 // if available; otherwise the store keeps a nil embedder and recall stays
 // lexical-only, so the default build works fully offline with no Ollama.
-func attachEmbedder(ctx context.Context, memories *memory.Store) {
+func attachEmbedder(ctx context.Context, memories *memoriespkg.Store) {
 	embedder := embed.NewOllama()
 	if embedder.Available(ctx) {
 		memories.WithEmbedder(embedder)
@@ -113,16 +159,16 @@ func runMemoryImport(ctx context.Context, args []string, stdout io.Writer, stder
 		return err
 	}
 
-	return withStores(ctx, config.storePath, func(sources *source.Store, _ *memory.Store) error {
+	return withStores(ctx, config.storePath, func(sources *sourcespkg.Store, _ *memoriespkg.Store) error {
 		logger := slog.New(slog.NewTextHandler(stderr, nil))
-		result, err := source.NewImporter(sources, logger).Import(ctx, config.from, now)
+		result, err := sourcespkg.NewImporter(sources, logger).Import(ctx, config.from, now)
 		if err != nil {
 			return err
 		}
 
 		if _, err := fmt.Fprintf(
 			stdout,
-			"imported %d session(s), skipped %d unsupported file(s)\n",
+			"saved %d source(s) from session files, skipped %d unsupported file(s)\n",
 			result.Imported,
 			result.Skipped,
 		); err != nil {
@@ -138,9 +184,9 @@ func runMemoryIngest(ctx context.Context, args []string, stdout io.Writer, stder
 		return err
 	}
 
-	return withStores(ctx, config.storePath, func(sources *source.Store, memories *memory.Store) error {
+	return withStores(ctx, config.storePath, func(sources *sourcespkg.Store, memories *memoriespkg.Store) error {
 		logger := slog.New(slog.NewTextHandler(stderr, nil))
-		ingester := memory.NewIngester(sources, memories, config.agents, logger)
+		ingester := memoriespkg.NewIngester(sources, memories, config.agents, logger)
 		result, err := ingester.Ingest(ctx, config.options, now)
 		if err != nil {
 			return err
@@ -148,9 +194,9 @@ func runMemoryIngest(ctx context.Context, args []string, stdout io.Writer, stder
 
 		if _, err := fmt.Fprintf(
 			stdout,
-			"ingested %d source(s), created %d memories, failed %d agent run(s)\n",
-			result.Sources,
+			"built %d memories from %d source(s), failed %d agent run(s)\n",
 			result.Memories,
+			result.Sources,
 			result.Errors,
 		); err != nil {
 			return fmt.Errorf("write ingest summary: %w", err)
@@ -165,15 +211,15 @@ func runMemoryRecall(ctx context.Context, args []string, stdout io.Writer, stder
 		return err
 	}
 
-	return withStores(ctx, config.storePath, func(_ *source.Store, memories *memory.Store) error {
-		recollections, err := memory.NewRecaller(memories).Recollect(ctx, config.task, config.scope, config.limit)
+	return withStores(ctx, config.storePath, func(_ *sourcespkg.Store, memories *memoriespkg.Store) error {
+		recallResults, err := memoriespkg.NewRecaller(memories).Recall(ctx, config.task, config.scope, config.limit)
 		if err != nil {
 			return err
 		}
 		if config.json {
-			return writeRecallJSON(stdout, recollections)
+			return writeRecallJSON(stdout, recallResults)
 		}
-		return writeRecallText(stdout, recollections)
+		return writeRecallText(stdout, recallResults)
 	})
 }
 
@@ -192,12 +238,13 @@ func parseMemoryRecallConfig(args []string, stderr io.Writer) (memoryRecallConfi
 
 	flags := flag.NewFlagSet("memory recall", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	storePath := flags.String("store", "", "SQLite memory store path")
-	task := flags.String("task", "", "Task text to recall relevant memory for")
-	scope := flags.String("scope", "", "Workspace scope to recall within (default: current directory)")
-	allScopes := flags.Bool("all-scopes", false, "Recall across every scope instead of the current workspace")
-	limit := flags.Int("limit", 0, "Maximum number of memories to return (0 = default)")
-	asJSON := flags.Bool("json", false, "Emit the recall result as JSON")
+	setUsage(flags, "usage: gieok memory recall <task> [--scope <workspace>|--all-scopes] [--limit <n>] [--json] [--store <sqlite-db>]")
+	storePath := flags.String("store", "", "SQLite file that stores gieok sources and memories")
+	task := flags.String("task", "", "Task or question to find useful memory for")
+	scope := flags.String("scope", "", "Workspace path to recall within (default: current directory)")
+	allScopes := flags.Bool("all-scopes", false, "Recall across every workspace scope")
+	limit := flags.Int("limit", 0, "Maximum number of memories to show (0 = default)")
+	asJSON := flags.Bool("json", false, "Print the recall result as JSON")
 
 	// Task text may appear positionally before or after flags, so reorder the
 	// args to put flags first. Without this, Go's flag package would stop at a
@@ -238,7 +285,7 @@ func parseMemoryRecallConfig(args []string, stderr io.Writer) (memoryRecallConfi
 // boolRecallFlags names the recall flags that take no value, so the arg
 // partitioner knows the following token is not their value.
 func boolRecallFlags() map[string]bool {
-	return map[string]bool{"all-scopes": true, "json": true}
+	return map[string]bool{"all-scopes": true, "json": true, "h": true, "help": true}
 }
 
 // partitionRecallArgs splits recall args into flag args (returned first, in
@@ -329,8 +376,8 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 
-	return withStores(ctx, storePath, func(_ *source.Store, memories *memory.Store) error {
-		server := mcp.NewServer(memory.NewRecaller(memories))
+	return withStores(ctx, storePath, func(_ *sourcespkg.Store, memories *memoriespkg.Store) error {
+		server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 		return server.Run(ctx, &mcpsdk.StdioTransport{})
 	})
 }
@@ -339,13 +386,17 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 // store path, defaulting to the shared import/ingest store.
 func parseMCPConfig(args []string, stderr io.Writer) (string, error) {
 	flagArgs := args[1:]
+	if len(flagArgs) > 0 && isHelpArg(flagArgs[0]) {
+		return "", writeHelp(stderr, "usage: gieok mcp [serve] [--store <sqlite-db>]")
+	}
 	if len(flagArgs) > 0 && flagArgs[0] == "serve" {
 		flagArgs = flagArgs[1:]
 	}
 
 	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	storePath := flags.String("store", "", "SQLite memory store path")
+	setUsage(flags, "usage: gieok mcp [serve] [--store <sqlite-db>]")
+	storePath := flags.String("store", "", "SQLite file that stores gieok sources and memories")
 	if err := flags.Parse(flagArgs); err != nil {
 		return "", err
 	}
@@ -362,8 +413,8 @@ type memoryImportConfig struct {
 
 type memoryIngestConfig struct {
 	storePath string
-	agents    []memory.Agent
-	options   memory.IngestOptions
+	agents    []memoriespkg.Agent
+	options   memoriespkg.IngestOptions
 }
 
 func parseMemoryImportConfig(args []string, stderr io.Writer) (memoryImportConfig, error) {
@@ -373,8 +424,9 @@ func parseMemoryImportConfig(args []string, stderr io.Writer) (memoryImportConfi
 
 	flags := flag.NewFlagSet("memory import", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	from := flags.String("from", "", "Codex sessions file or directory")
-	storePath := flags.String("store", "", "SQLite memory store path")
+	setUsage(flags, "usage: gieok memory import --from <file-or-dir> [--store <sqlite-db>]")
+	from := flags.String("from", "", "Codex or Claude Code session file or directory to save as Source")
+	storePath := flags.String("store", "", "SQLite file that stores gieok sources and memories")
 	if err := flags.Parse(args[2:]); err != nil {
 		return memoryImportConfig{}, err
 	}
@@ -399,14 +451,15 @@ func parseMemoryIngestConfig(args []string, stderr io.Writer) (memoryIngestConfi
 
 	flags := flag.NewFlagSet("memory ingest", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	storePath := flags.String("store", "", "SQLite memory store path")
-	limit := flags.Int("limit", 0, "Maximum number of sources to ingest")
+	setUsage(flags, "usage: gieok memory ingest [--agent <name=command[,arg...]>] [--source-id <source-id>] [--limit <n>] [--store <sqlite-db>]")
+	storePath := flags.String("store", "", "SQLite file that stores gieok sources and memories")
+	limit := flags.Int("limit", 0, "Maximum number of sources to turn into memory")
 	concurrency := flags.Int("concurrency", 0, "Maximum agents to run at once (0 = default)")
-	skipExisting := flags.Bool("skip-existing", false, "Skip sources already ingested by an agent")
+	skipExisting := flags.Bool("skip-existing", false, "Skip source-agent pairs that already have memory")
 	var agentSpecs repeatedFlag
 	var sourceIDs repeatedFlag
-	flags.Var(&agentSpecs, "agent", "Agent command as name=command[,arg...], or a bare default agent name (claude, codex, pi)")
-	flags.Var(&sourceIDs, "source-id", "Source ID to ingest; repeatable")
+	flags.Var(&agentSpecs, "agent", "Agent command as name=command[,arg...], or a built-in agent name (claude, codex, pi)")
+	flags.Var(&sourceIDs, "source-id", "Source ID to turn into memory; repeatable")
 	if err := flags.Parse(args[2:]); err != nil {
 		return memoryIngestConfig{}, err
 	}
@@ -422,14 +475,14 @@ func parseMemoryIngestConfig(args []string, stderr io.Writer) (memoryIngestConfi
 	if len(agentSpecs) == 0 {
 		return memoryIngestConfig{
 			storePath: *storePath,
-			agents:    memory.DefaultAgents(),
+			agents:    memoriespkg.DefaultAgents(),
 			options:   options,
 		}, nil
 	}
 
-	agents := make([]memory.Agent, 0, len(agentSpecs))
+	agents := make([]memoriespkg.Agent, 0, len(agentSpecs))
 	for _, spec := range agentSpecs {
-		agent, err := memory.ResolveAgentSpec(spec)
+		agent, err := memoriespkg.ResolveAgentSpec(spec)
 		if err != nil {
 			return memoryIngestConfig{}, err
 		}
@@ -442,8 +495,8 @@ func parseMemoryIngestConfig(args []string, stderr io.Writer) (memoryIngestConfi
 	}, nil
 }
 
-func newIngestOptions(sourceIDs []string, limit int, concurrency int, skipExisting bool) memory.IngestOptions {
-	options := memory.IngestOptions{
+func newIngestOptions(sourceIDs []string, limit int, concurrency int, skipExisting bool) memoriespkg.IngestOptions {
+	options := memoriespkg.IngestOptions{
 		Limit:        limit,
 		Concurrency:  concurrency,
 		SkipExisting: skipExisting,
@@ -452,9 +505,9 @@ func newIngestOptions(sourceIDs []string, limit int, concurrency int, skipExisti
 		return options
 	}
 
-	options.SourceIDs = make([]source.SourceID, 0, len(sourceIDs))
+	options.SourceIDs = make([]sourcespkg.SourceID, 0, len(sourceIDs))
 	for _, id := range sourceIDs {
-		options.SourceIDs = append(options.SourceIDs, source.SourceID(id))
+		options.SourceIDs = append(options.SourceIDs, sourcespkg.SourceID(id))
 	}
 	return options
 }

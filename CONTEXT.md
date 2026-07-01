@@ -1,36 +1,43 @@
-# My
+# gieok
 
-My stores reusable agent memory and exposes it to local tools and agents.
+gieok은 코딩 에이전트가 예전 작업에서 배운 것을 다시 떠올리게 해 주는 로컬 기억 도구다.
+세션 파일을 그대로 보관하고, 그 안에서 다음 작업에 쓸 만한 기억을 따로 만든다.
 
 ## Language
 
-**Source**:
-Raw input that is saved before Memory is derived from it, such as a session transcript, hook event, or manual note.
-Source is immutable; corrections are captured as later Source or Memory.
-_Avoid_: Memory, event
+**Source (원본)**
+Codex나 Claude Code 세션 파일처럼 아직 해석하지 않은 원재료다.
+원본은 한 번 저장하면 고치지 않는다. 잘못 해석한 내용은 새 원본이나 새 기억으로 바로잡는다.
+원본을 Memory, log, event라고 부르지 않는다.
 
-**Memory**:
-A curated unit of knowledge that an agent can reuse later.
-Every Memory must come from at least one Source.
-Memory can be revised when better interpretation is available.
-_Avoid_: raw session, transcript, log
+**Memory (기억)**
+에이전트가 원본을 읽고 다음 작업에 다시 쓸 수 있게 정리한 짧은 지식이다.
+모든 기억은 적어도 하나의 원본에서 나온다.
+기억은 세션을 베껴 놓은 요약이 아니라, 나중에 바로 행동에 옮길 수 있는 해석이어야 한다.
+기억을 원본 세션 파일, 대화 기록, Source라고 부르지 않는다.
 
-**Scope**:
-The boundary that controls where Memory applies, such as a project, workspace, or session.
-_Avoid_: namespace, tenant, global
+**Scope (범위)**
+기억이 적용되는 작업공간이다. 지금은 보통 프로젝트 디렉터리 경로다.
+기본 Recall은 현재 작업공간 범위 안에서만 찾는다.
+Scope를 namespace, tenant, global이라고 바꿔 부르지 않는다.
 
-**Link**:
-A relationship between one Memory and another Memory.
-_Avoid_: edge
+**Import (원본 가져오기)**
+세션 파일을 읽어 Source로 저장하는 단계다.
+Import는 기억을 만들지 않는다.
 
-**Record**:
-To save Source and the Memory derived from it.
-_Avoid_: add, ingest
+**Ingest (기억 만들기)**
+저장된 Source를 에이전트에게 읽혀 Memory를 만들거나 교체하는 단계다.
+CLI와 코드에서는 `ingest`라는 이름을 유지하지만, 설명할 때는 "기억 만들기"라고 풀어 쓴다.
 
-**Recall**:
-To find relevant Memory within a Scope.
-_Avoid_: search, query
+**Recall (떠올리기)**
+지금 작업이나 질문에 맞는 Memory를 Scope 안에서 찾는 동작이다.
+사용자에게는 원본 세션 파일 검색이 아니라 "기억을 떠올린다"고 설명한다.
+`search`와 `query`는 랭킹 엔진, DB, MCP 입력 필드처럼 낮은 수준의 이름이 필요할 때만 쓴다.
 
-**Hook**:
-A lifecycle command that lets an agent record or recall Memory around a session.
-_Avoid_: sync
+**Link (연결)**
+어떤 Memory가 어떤 Source에서 나왔는지 남기는 관계다.
+지금 구현의 연결은 Source와 Memory 사이의 증거 연결이다.
+
+**Hook (훅)**
+세션이 끝날 때 같은 생명주기 시점에 gieok을 자동으로 실행하는 외부 명령이다.
+훅은 원본을 가져오는 트리거일 뿐, 기억의 이름이나 저장 모델이 아니다.

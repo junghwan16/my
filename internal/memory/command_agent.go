@@ -1,4 +1,4 @@
-package memory
+package memories
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 )
 
 const (
@@ -21,7 +21,7 @@ const (
 	maxRelatedQueryBytes = 4_000
 	// maxRelatedMemoryBytes bounds how much of the ingest prompt the related-
 	// memory section may take, leaving the rest of maxPromptBytes for the
-	// source's own raw material.
+	// source's own sampled text.
 	maxRelatedMemoryBytes = 4_000
 	// maxRelatedItemBytes truncates any single related memory shown in the
 	// prompt, so one long memory can't crowd out the others.
@@ -29,7 +29,7 @@ const (
 )
 
 // runner sends a prompt to an external process and returns its stdout. It is the
-// transport seam of CommandAgent: it owns process spawning, stderr capture, and
+// transport boundary of CommandAgent: it owns process spawning, stderr capture, and
 // error wrapping, so CommandAgent's prompt building and output parsing can be
 // tested without spawning a real process.
 type runner interface {
@@ -149,9 +149,9 @@ func decodeAgentMemories(text string) ([]AgentMemory, bool) {
 
 func buildIngestPrompt(input AgentInput) string {
 	var b strings.Builder
-	b.WriteString("Ingest this source into durable memory.\n")
-	b.WriteString("Memory is curated, reusable knowledge distilled from this source — not a transcript " +
-		"restatement. Write what a future agent would actually need to know, in your own words.\n")
+	b.WriteString("Turn this source into durable memory.\n")
+	b.WriteString("A Memory is a short, reusable note a future coding agent can act on. Do not copy " +
+		"the session text; explain the useful lesson in your own words.\n")
 	fmt.Fprintf(&b, "Source ID: %s\n", input.Source.ID)
 	fmt.Fprintf(&b, "Source kind: %s\n", input.Source.Kind)
 	fmt.Fprintf(&b, "Source URI: %s\n", input.Source.URI)
@@ -159,7 +159,7 @@ func buildIngestPrompt(input AgentInput) string {
 
 	writeRelatedMemories(&b, input.RelatedMemories)
 
-	b.WriteString("Raw material sampled from the source (reference only — do not quote it verbatim):\n")
+	b.WriteString("Source sample (reference only; do not quote it verbatim):\n")
 	for _, event := range sampleEvents(input.Events, maxPromptEvents) {
 		if b.Len() >= maxPromptBytes {
 			break
@@ -177,19 +177,19 @@ func buildIngestPrompt(input AgentInput) string {
 // writeRelatedMemories renders the existing memory recalled for this source
 // (see Ingester.recallRelatedMemories) so an agent connects new memory to what
 // is already known instead of ingesting the source in isolation.
-func writeRelatedMemories(b *strings.Builder, related []Recollection) {
+func writeRelatedMemories(b *strings.Builder, related []RecallResult) {
 	if len(related) == 0 {
-		b.WriteString("Existing related memory: none yet — this is the first memory for this context.\n\n")
+		b.WriteString("Existing related memory: none yet; this is the first memory for this context.\n\n")
 		return
 	}
 
-	b.WriteString("Existing related memory (already known — connect this source to it, don't repeat it):\n")
-	for _, recollection := range related {
+	b.WriteString("Existing related memory (already known; connect this source to it, don't repeat it):\n")
+	for _, recallResult := range related {
 		if b.Len() >= maxRelatedMemoryBytes {
 			break
 		}
-		text := truncateUTF8(recollection.Text, maxRelatedItemBytes)
-		fmt.Fprintf(b, "- [%s] (%s, %s) %s\n", recollection.MemoryID, recollection.Agent, recollection.Kind, text)
+		text := truncateUTF8(recallResult.Text, maxRelatedItemBytes)
+		fmt.Fprintf(b, "- [%s] (%s, %s) %s\n", recallResult.MemoryID, recallResult.Agent, recallResult.Kind, text)
 	}
 	b.WriteString("Confirm, extend, update, or contradict the above where this source bears on it; " +
 		"otherwise call out only what is genuinely new.\n\n")
@@ -198,7 +198,7 @@ func writeRelatedMemories(b *strings.Builder, related []Recollection) {
 // relatedMemoryQuery builds the recall query text for a source before it is
 // ingested, from the same evenly-sampled events buildIngestPrompt shows the
 // agent, so the recall reflects the same material the agent will read.
-func relatedMemoryQuery(events []source.SourceEvent) string {
+func relatedMemoryQuery(events []sourcespkg.SourceEvent) string {
 	var b strings.Builder
 	for _, event := range sampleEvents(events, maxPromptEvents) {
 		if b.Len() >= maxRelatedQueryBytes {
@@ -219,7 +219,7 @@ func relatedMemoryQuery(events []source.SourceEvent) string {
 // the leading events made memory reflect a session's opening alone; sampling by
 // an even stride makes one bounded prompt cover beginning, middle, and end so
 // late-session topics are still summarized (and thus recallable).
-func sampleEvents(events []source.SourceEvent, maxEvents int) []source.SourceEvent {
+func sampleEvents(events []sourcespkg.SourceEvent, maxEvents int) []sourcespkg.SourceEvent {
 	if maxEvents <= 0 || len(events) == 0 {
 		return nil
 	}
@@ -227,7 +227,7 @@ func sampleEvents(events []source.SourceEvent, maxEvents int) []source.SourceEve
 		return events
 	}
 
-	sampled := make([]source.SourceEvent, 0, maxEvents)
+	sampled := make([]sourcespkg.SourceEvent, 0, maxEvents)
 	last := len(events) - 1
 	prev := -1
 	for i := range maxEvents {

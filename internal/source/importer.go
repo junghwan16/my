@@ -1,4 +1,4 @@
-package source
+package sources
 
 import (
 	"bytes"
@@ -15,9 +15,9 @@ import (
 	"time"
 )
 
-// Recorder stores a parsed source and its normalized events. *Store satisfies it.
-type Recorder interface {
-	RecordSource(context.Context, Source, []SourceEvent) error
+// SourceWriter saves a parsed source and its normalized events. *Store satisfies it.
+type SourceWriter interface {
+	SaveSource(context.Context, Source, []SourceEvent) error
 }
 
 // SessionFormat recognizes and parses one coding-agent session file format.
@@ -34,7 +34,7 @@ type SessionFormat interface {
 }
 
 // ParsedSession is everything a SessionFormat extracts from a session file. The
-// shared envelope (content hash, ID, URI, recorded-at, ended-at, event indexing)
+// shared envelope (content hash, ID, URI, import time, end time, event indexing)
 // is filled in by assembleSource, not by the format.
 type ParsedSession struct {
 	Events    []SourceEvent
@@ -59,27 +59,27 @@ type ImportResult struct {
 
 var errUnsupportedSession = errors.New("unsupported session file")
 
-// Importer reads coding-agent session files and records them as sources.
+// Importer reads coding-agent session files and saves them as Sources.
 type Importer struct {
-	store  Recorder
+	store  SourceWriter
 	logger *slog.Logger
 }
 
-// NewImporter returns an Importer that records into store.
-func NewImporter(store Recorder, logger *slog.Logger) *Importer {
+// NewImporter returns an Importer that saves into store.
+func NewImporter(store SourceWriter, logger *slog.Logger) *Importer {
 	return &Importer{store: store, logger: loggerOrDiscard(logger)}
 }
 
-// Import records every supported JSONL session file under a file or directory.
+// Import saves every supported JSONL session file under a file or directory.
 func (im *Importer) Import(ctx context.Context, from string, now time.Time) (ImportResult, error) {
 	info, err := os.Stat(from)
 	if err != nil {
 		return ImportResult{}, fmt.Errorf("stat sessions path: %w", err)
 	}
 	if !info.IsDir() {
-		source, recordErr := im.Read(ctx, from, now)
-		if recordErr != nil {
-			return ImportResult{}, recordErr
+		source, readErr := im.Read(ctx, from, now)
+		if readErr != nil {
+			return ImportResult{}, readErr
 		}
 		im.logImported(ctx, from, source)
 		return ImportResult{Imported: 1, Sources: []Source{source}}, nil
@@ -93,14 +93,14 @@ func (im *Importer) Import(ctx context.Context, from string, now time.Time) (Imp
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			return nil
 		}
-		source, recordErr := im.Read(ctx, path, now)
-		if recordErr != nil {
-			if errors.Is(recordErr, errUnsupportedSession) {
+		source, readErr := im.Read(ctx, path, now)
+		if readErr != nil {
+			if errors.Is(readErr, errUnsupportedSession) {
 				result.Skipped++
 				im.logger.InfoContext(ctx, "skipped unsupported session file", "path", path)
 				return nil
 			}
-			return recordErr
+			return readErr
 		}
 		result.Imported++
 		result.Sources = append(result.Sources, source)
@@ -113,7 +113,7 @@ func (im *Importer) Import(ctx context.Context, from string, now time.Time) (Imp
 	return result, nil
 }
 
-// Read parses and records one supported session file.
+// Read parses and saves one supported session file.
 func (im *Importer) Read(ctx context.Context, path string, now time.Time) (Source, error) {
 	//nolint:gosec // Import reads a user-selected session file path.
 	raw, err := os.ReadFile(path)
@@ -126,7 +126,7 @@ func (im *Importer) Read(ctx context.Context, path string, now time.Time) (Sourc
 		return Source{}, err
 	}
 
-	if err := im.store.RecordSource(ctx, source, events); err != nil {
+	if err := im.store.SaveSource(ctx, source, events); err != nil {
 		return Source{}, err
 	}
 	return source, nil
@@ -153,7 +153,7 @@ func parseSessionSource(path string, raw []byte, now time.Time) (Source, []Sourc
 // assembleSource wraps a format's ParsedSession in the shared Source envelope:
 // it hashes the raw bytes for content identity, derives the Source ID from the
 // format Kind, stamps timestamps, and back-fills each event's SourceID and index.
-func assembleSource(format SessionFormat, uri string, raw []byte, recordedAt time.Time) (Source, []SourceEvent, error) {
+func assembleSource(format SessionFormat, uri string, raw []byte, importedAt time.Time) (Source, []SourceEvent, error) {
 	parsed, err := format.Parse(raw)
 	if err != nil {
 		return Source{}, nil, err
@@ -169,7 +169,7 @@ func assembleSource(format SessionFormat, uri string, raw []byte, recordedAt tim
 		Scope:         parsed.Scope,
 		StartedAt:     parsed.StartedAt,
 		EndedAt:       lastEventTime(parsed.Events),
-		RecordedAt:    recordedAt,
+		ImportedAt:    importedAt,
 		MetadataJSON:  parsed.Metadata,
 	}
 

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 	"github.com/junghwan16/gieok/internal/migrate"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 )
 
-func TestMemoryImportFromDirectoryRecordsSessions(t *testing.T) {
+func TestMemoryImportFromDirectorySavesSources(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	sessionsDir := filepath.Join(dir, "sessions")
@@ -45,16 +47,16 @@ func TestMemoryImportFromDirectoryRecordsSessions(t *testing.T) {
 	sources, _, closeStores := openStores(ctx, t, dbPath)
 	defer closeStores()
 
-	if !strings.Contains(stdout.String(), "imported 2 session") {
+	if !strings.Contains(stdout.String(), "saved 2 source") {
 		t.Fatalf("stdout = %q, want import count", stdout.String())
 	}
 
-	recorded, err := sources.Sources(ctx)
+	saved, err := sources.Sources(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recorded) != 2 {
-		t.Fatalf("sources length = %d, want 2", len(recorded))
+	if len(saved) != 2 {
+		t.Fatalf("sources length = %d, want 2", len(saved))
 	}
 }
 
@@ -79,12 +81,71 @@ func TestMemoryImportUsesDefaultStore(t *testing.T) {
 	sources, _, closeStores := openStores(ctx, t, dbPath)
 	defer closeStores()
 
-	recorded, err := sources.Sources(ctx)
+	saved, err := sources.Sources(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recorded) != 1 {
-		t.Fatalf("sources length = %d, want 1", len(recorded))
+	if len(saved) != 1 {
+		t.Fatalf("sources length = %d, want 1", len(saved))
+	}
+}
+
+func TestHelpReturnsCleanly(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "top level",
+			args: []string{"-h"},
+			want: "usage: gieok <memory|mcp>",
+		},
+		{
+			name: "memory",
+			args: []string{"memory", "-h"},
+			want: "usage: gieok memory <import|ingest|recall>",
+		},
+		{
+			name: "import",
+			args: []string{"memory", "import", "-h"},
+			want: "usage: gieok memory import --from <file-or-dir>",
+		},
+		{
+			name: "ingest",
+			args: []string{"memory", "ingest", "-h"},
+			want: "usage: gieok memory ingest",
+		},
+		{
+			name: "recall",
+			args: []string{"memory", "recall", "-h"},
+			want: "usage: gieok memory recall <task>",
+		},
+		{
+			name: "mcp",
+			args: []string{"mcp", "-h"},
+			want: "usage: gieok mcp [serve]",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			err := run(context.Background(), tc.args, &stdout, &stderr, time.Now())
+			if !errors.Is(err, flag.ErrHelp) {
+				t.Fatalf("error = %v, want flag.ErrHelp", err)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+			if got := stderr.String(); !strings.Contains(got, tc.want) {
+				t.Fatalf("stderr = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(stderr.String(), "flag: help requested") {
+				t.Fatalf("stderr = %q, should not print help as an error", stderr.String())
+			}
+		})
 	}
 }
 
@@ -102,7 +163,7 @@ func TestMemoryIngestRunsConfiguredAgent(t *testing.T) {
 
 	sources, _, closeStores := openStores(ctx, t, dbPath)
 	src := cliTestSource("codex_session:test", "source", now)
-	if err := sources.RecordSource(ctx, src, nil); err != nil {
+	if err := sources.SaveSource(ctx, src, nil); err != nil {
 		t.Fatal(err)
 	}
 	closeStores()
@@ -113,14 +174,14 @@ func TestMemoryIngestRunsConfiguredAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run returned error: %v\nstderr: %s", err, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "ingested 1 source") {
+	if !strings.Contains(stdout.String(), "built 1 memories from 1 source") {
 		t.Fatalf("stdout = %q, want ingest count", stdout.String())
 	}
 
 	_, memories, closeStores := openStores(ctx, t, dbPath)
 	defer closeStores()
 
-	recalled, err := memory.NewRecaller(memories).Recall(ctx, src.ID)
+	recalled, err := memoriespkg.NewRecaller(memories).SourceMemories(ctx, src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,10 +208,10 @@ func TestMemoryIngestCanLimitSources(t *testing.T) {
 	sources, _, closeStores := openStores(ctx, t, dbPath)
 	first := cliTestSource("codex_session:first", "first", now)
 	second := cliTestSource("codex_session:second", "second", now)
-	if err := sources.RecordSource(ctx, first, nil); err != nil {
+	if err := sources.SaveSource(ctx, first, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := sources.RecordSource(ctx, second, nil); err != nil {
+	if err := sources.SaveSource(ctx, second, nil); err != nil {
 		t.Fatal(err)
 	}
 	closeStores()
@@ -170,15 +231,15 @@ func TestMemoryIngestCanLimitSources(t *testing.T) {
 
 	_, memories, closeStores := openStores(ctx, t, dbPath)
 	defer closeStores()
-	recaller := memory.NewRecaller(memories)
-	firstMemories, err := recaller.Recall(ctx, first.ID)
+	recaller := memoriespkg.NewRecaller(memories)
+	firstMemories, err := recaller.SourceMemories(ctx, first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(firstMemories) != 1 {
 		t.Fatalf("first source memories length = %d, want 1", len(firstMemories))
 	}
-	secondMemories, err := recaller.Recall(ctx, second.ID)
+	secondMemories, err := recaller.SourceMemories(ctx, second.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,17 +286,17 @@ func TestMemoryIngestParsesTuningFlags(t *testing.T) {
 	}
 }
 
-func cliTestSource(id source.SourceID, name string, now time.Time) source.Source {
-	return source.Source{
+func cliTestSource(id sourcespkg.SourceID, name string, now time.Time) sourcespkg.Source {
+	return sourcespkg.Source{
 		ID:            id,
-		Kind:          source.SourceKindCodexSession,
+		Kind:          sourcespkg.SourceKindCodexSession,
 		URI:           "memory://test/" + name,
 		ContentSHA256: "hash-" + name,
-		Scope: source.Scope{
-			Kind:  source.ScopeKindWorkspace,
+		Scope: sourcespkg.Scope{
+			Kind:  sourcespkg.ScopeKindWorkspace,
 			Value: "/work/project",
 		},
-		RecordedAt:   now,
+		ImportedAt:   now,
 		MetadataJSON: json.RawMessage(`{}`),
 	}
 }
@@ -250,7 +311,7 @@ func writeFile(t *testing.T, path string, content string) {
 	}
 }
 
-func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, *memory.Store, func()) {
+func openStores(ctx context.Context, t *testing.T, path string) (*sourcespkg.Store, *memoriespkg.Store, func()) {
 	t.Helper()
 	db, err := storage.OpenSQLite(path)
 	if err != nil {
@@ -265,7 +326,7 @@ func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, 
 		closeStore()
 		t.Fatal(err)
 	}
-	return source.NewStore(db), memory.NewStore(db, spaceTokenizer{}), closeStore
+	return sourcespkg.NewStore(db), memoriespkg.NewStore(db, spaceTokenizer{}), closeStore
 }
 
 // spaceTokenizer is a whitespace tokenizer used only to satisfy NewStore in

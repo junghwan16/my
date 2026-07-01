@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/junghwan16/gieok/internal/mcp"
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 )
 
 func TestStatusReportsIndexHealth(t *testing.T) {
@@ -17,7 +17,7 @@ func TestStatusReportsIndexHealth(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/b"), "memory:b", "날씨 정보")
 
-	server := mcp.NewServer(memory.NewRecaller(memories))
+	server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 
 	out, err := server.Status(ctx, mcp.StatusInput{})
 	if err != nil {
@@ -41,7 +41,7 @@ func TestGetReturnsMemoryByID(t *testing.T) {
 
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "코스피 종목 분석 리포트")
 
-	server := mcp.NewServer(memory.NewRecaller(memories))
+	server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 
 	out, err := server.Get(ctx, mcp.GetInput{MemoryID: "memory:a"})
 	if err != nil {
@@ -54,9 +54,9 @@ func TestGetReturnsMemoryByID(t *testing.T) {
 		t.Fatalf("memory id = %q, want memory:a", out.Memory.MemoryID)
 	}
 	if out.Memory.Text != "코스피 종목 분석 리포트" {
-		t.Fatalf("text = %q, want the recorded text", out.Memory.Text)
+		t.Fatalf("text = %q, want the saved text", out.Memory.Text)
 	}
-	if out.Memory.Agent != "t" || out.Memory.Kind != string(memory.MemoryKindSummary) {
+	if out.Memory.Agent != "t" || out.Memory.Kind != string(memoriespkg.MemoryKindSummary) {
 		t.Fatalf("agent/kind = %q/%q, want t/summary", out.Memory.Agent, out.Memory.Kind)
 	}
 	if out.Memory.Created == "" {
@@ -80,7 +80,7 @@ func TestGetReportsNotFound(t *testing.T) {
 
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
 
-	server := mcp.NewServer(memory.NewRecaller(memories))
+	server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 
 	out, err := server.Get(ctx, mcp.GetInput{MemoryID: "memory:missing"})
 	if err != nil {
@@ -99,7 +99,7 @@ func TestGetEmptyIDErrors(t *testing.T) {
 	_, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
 	defer closeStores()
 
-	server := mcp.NewServer(memory.NewRecaller(memories))
+	server := mcp.NewServer(memoriespkg.NewRecaller(memories))
 
 	if _, err := server.Get(ctx, mcp.GetInput{MemoryID: ""}); err == nil {
 		t.Fatal("empty memory_id returned no error, want an error")

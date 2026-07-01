@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	_ "github.com/glebarez/go-sqlite" // Register the pure-Go SQLite database/sql driver.
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
-	_ "modernc.org/sqlite" // Register the SQLite database/sql driver.
 )
 
 // sqlitePragmas are applied to every new connection. foreign_keys enforces the
@@ -19,8 +19,8 @@ const sqlitePragmas = "_pragma=busy_timeout(15000)&_pragma=foreign_keys(1)&_prag
 
 // OpenSQLite opens a SQLite database handle with the store's required pragmas.
 //
-// Schema ownership lives with the domain package (memory.Migrate); this package
-// only owns connection and driver concerns.
+// Schema ownership lives in internal/migrate; this package only owns connection
+// and driver concerns.
 func OpenSQLite(path string) (*bun.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create sqlite parent directory: %w", err)

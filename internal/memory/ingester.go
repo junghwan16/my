@@ -1,4 +1,4 @@
-package memory
+package memories
 
 import (
 	"context"
@@ -10,20 +10,20 @@ import (
 	"time"
 
 	"github.com/junghwan16/gieok/internal/jsonutil"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 )
 
-// SourceReader supplies the sources an ingest run reads. *source.Store satisfies it.
+// SourceReader supplies the sources an ingest run reads. *sources.Store satisfies it.
 type SourceReader interface {
-	Sources(context.Context) ([]source.Source, error)
-	Source(context.Context, source.SourceID) (source.Source, error)
-	SourceEvents(context.Context, source.SourceID) ([]source.SourceEvent, error)
+	Sources(context.Context) ([]sourcespkg.Source, error)
+	Source(context.Context, sourcespkg.SourceID) (sourcespkg.Source, error)
+	SourceEvents(context.Context, sourcespkg.SourceID) ([]sourcespkg.SourceEvent, error)
 }
 
 // MemoryWriter persists the memories an ingest run produces. *Store satisfies it.
 type MemoryWriter interface {
-	SourceHasAgentMemories(context.Context, source.SourceID, string) (bool, error)
-	ReplaceSourceMemories(context.Context, source.SourceID, string, []Memory, []Link) error
+	SourceHasAgentMemories(context.Context, sourcespkg.SourceID, string) (bool, error)
+	ReplaceSourceMemories(context.Context, sourcespkg.SourceID, string, []Memory, []Link) error
 }
 
 // MemoryStore reads and writes memories. *Store satisfies it. Ingest writes new
@@ -43,14 +43,14 @@ type Agent interface {
 
 // AgentInput is the source context given to an ingest agent.
 type AgentInput struct {
-	Source source.Source
-	Events []source.SourceEvent
+	Source sourcespkg.Source
+	Events []sourcespkg.SourceEvent
 	// RelatedMemories is existing memory already recalled as relevant to this
 	// source (same scope, recalled by the source's own sampled content),
 	// excluding any memory already linked to this source. It lets an agent
 	// connect a new memory to what it already knows instead of summarizing
 	// the source in isolation.
-	RelatedMemories []Recollection
+	RelatedMemories []RecallResult
 }
 
 // AgentOutput is the memory material produced by one agent.
@@ -76,7 +76,7 @@ const relatedMemoryLimit = 5
 
 // IngestOptions narrows which sources are processed and tunes the run.
 type IngestOptions struct {
-	SourceIDs []source.SourceID
+	SourceIDs []sourcespkg.SourceID
 	Limit     int
 	// Concurrency caps simultaneously running agents. Zero means defaultConcurrency.
 	Concurrency int
@@ -92,7 +92,7 @@ type IngestResult struct {
 	Errors   int
 }
 
-// Ingester runs agents over recorded sources and links the memories they produce.
+// Ingester runs agents over saved Sources and links the memories they produce.
 type Ingester struct {
 	sources  SourceReader
 	memories MemoryStore
@@ -146,35 +146,35 @@ func (in *Ingester) Ingest(ctx context.Context, options IngestOptions, now time.
 	return result, nil
 }
 
-func (in *Ingester) selectSources(ctx context.Context, options IngestOptions) ([]source.Source, error) {
-	var sources []source.Source
+func (in *Ingester) selectSources(ctx context.Context, options IngestOptions) ([]sourcespkg.Source, error) {
+	var selected []sourcespkg.Source
 	if len(options.SourceIDs) > 0 {
-		sources = make([]source.Source, 0, len(options.SourceIDs))
+		selected = make([]sourcespkg.Source, 0, len(options.SourceIDs))
 		for _, id := range options.SourceIDs {
 			src, err := in.sources.Source(ctx, id)
 			if err != nil {
 				return nil, err
 			}
-			sources = append(sources, src)
+			selected = append(selected, src)
 		}
 	} else {
 		var err error
-		sources, err = in.sources.Sources(ctx)
+		selected, err = in.sources.Sources(ctx)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if options.Limit <= 0 || options.Limit >= len(sources) {
-		return sources, nil
+	if options.Limit <= 0 || options.Limit >= len(selected) {
+		return selected, nil
 	}
-	return sources[:options.Limit], nil
+	return selected[:options.Limit], nil
 }
 
 func (in *Ingester) ingestSource(
 	ctx context.Context,
-	src source.Source,
-	events []source.SourceEvent,
+	src sourcespkg.Source,
+	events []sourcespkg.SourceEvent,
 	sem chan struct{},
 	skipExisting bool,
 	now time.Time,
@@ -247,31 +247,31 @@ func (in *Ingester) ingestSource(
 // ingest, on a re-run) since that is not "other" existing knowledge.
 func (in *Ingester) recallRelatedMemories(
 	ctx context.Context,
-	src source.Source,
-	events []source.SourceEvent,
-) ([]Recollection, error) {
+	src sourcespkg.Source,
+	events []sourcespkg.SourceEvent,
+) ([]RecallResult, error) {
 	query := relatedMemoryQuery(events)
 	if query == "" {
 		return nil, nil
 	}
 
-	recalled, err := in.related.Recollect(ctx, query, src.Scope.Value, relatedMemoryLimit)
+	recalled, err := in.related.Recall(ctx, query, src.Scope.Value, relatedMemoryLimit)
 	if err != nil {
 		return nil, err
 	}
 
-	related := make([]Recollection, 0, len(recalled))
-	for _, recollection := range recalled {
-		if recollectionHasSource(recollection, src.ID) {
+	related := make([]RecallResult, 0, len(recalled))
+	for _, recallResult := range recalled {
+		if recallResultHasSource(recallResult, src.ID) {
 			continue
 		}
-		related = append(related, recollection)
+		related = append(related, recallResult)
 	}
 	return related, nil
 }
 
-func recollectionHasSource(recollection Recollection, sourceID source.SourceID) bool {
-	for _, ref := range recollection.Sources {
+func recallResultHasSource(recallResult RecallResult, sourceID sourcespkg.SourceID) bool {
+	for _, ref := range recallResult.Sources {
 		if ref.ID == sourceID {
 			return true
 		}
@@ -281,7 +281,7 @@ func recollectionHasSource(recollection Recollection, sourceID source.SourceID) 
 
 // selectAgents drops agents whose memories already exist for the source when
 // skipExisting is set, so re-runs only do outstanding work.
-func (in *Ingester) selectAgents(ctx context.Context, sourceID source.SourceID, skipExisting bool) ([]Agent, error) {
+func (in *Ingester) selectAgents(ctx context.Context, sourceID sourcespkg.SourceID, skipExisting bool) ([]Agent, error) {
 	if !skipExisting {
 		return in.agents, nil
 	}
@@ -304,7 +304,7 @@ func (in *Ingester) selectAgents(ctx context.Context, sourceID source.SourceID, 
 }
 
 // memoriesFromAgentRun turns one agent's output into memories and their source links.
-func memoriesFromAgentRun(sourceID source.SourceID, run agentRunResult, now time.Time) ([]Memory, []Link) {
+func memoriesFromAgentRun(sourceID sourcespkg.SourceID, run agentRunResult, now time.Time) ([]Memory, []Link) {
 	memories := make([]Memory, 0, len(run.output.Memories))
 	links := make([]Link, 0, len(run.output.Memories))
 	for _, agentMemory := range run.output.Memories {
@@ -327,7 +327,7 @@ type agentRunResult struct {
 	err    error
 }
 
-func memoryFromAgentOutput(sourceID source.SourceID, agent string, agentMemory AgentMemory, now time.Time) Memory {
+func memoryFromAgentOutput(sourceID sourcespkg.SourceID, agent string, agentMemory AgentMemory, now time.Time) Memory {
 	if agentMemory.Kind == "" {
 		agentMemory.Kind = MemoryKindSummary
 	}
@@ -345,7 +345,7 @@ func memoryFromAgentOutput(sourceID source.SourceID, agent string, agentMemory A
 	}
 }
 
-func deterministicMemoryID(sourceID source.SourceID, agent string, kind MemoryKind, text string) MemoryID {
+func deterministicMemoryID(sourceID sourcespkg.SourceID, agent string, kind MemoryKind, text string) MemoryID {
 	h := sha256.New()
 	_, _ = h.Write([]byte(sourceID))
 	_, _ = h.Write([]byte{0})

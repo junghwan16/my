@@ -1,15 +1,15 @@
-package memory_test
+package memories_test
 
 import (
 	"context"
 	"path/filepath"
 	"testing"
 
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 )
 
-// indexOf returns the position of memID in the recollection list, or -1.
-func indexOf(recs []memory.Recollection, memID memory.MemoryID) int {
+// indexOf returns the position of memID in the recall result list, or -1.
+func indexOf(recs []memoriespkg.RecallResult, memID memoriespkg.MemoryID) int {
 	for i, r := range recs {
 		if r.MemoryID == memID {
 			return i
@@ -47,7 +47,7 @@ func TestHybridFusionSurfacesBothRankersTops(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:mid", "/w/mid"),
 		"memory:mid", "some middling filler content")
 
-	got, err := memory.NewRecaller(memories).Recollect(ctx, "alpha", "", 10)
+	got, err := memoriespkg.NewRecaller(memories).Recall(ctx, "alpha", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +70,8 @@ func TestHybridFusionSurfacesBothRankersTops(t *testing.T) {
 }
 
 // TestHybridWithoutEmbedderEqualsLexical proves that with no embedder attached,
-// hybrid recall (via Recollect) returns exactly the lexical ranking — no error,
-// no semantic contribution — so recall degrades gracefully offline.
+// hybrid recall (via Recall) returns exactly the lexical ranking — no error,
+// no semantic contribution, so recall uses lexical ranking offline.
 func TestHybridWithoutEmbedderEqualsLexical(t *testing.T) {
 	ctx := context.Background()
 	sources, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
@@ -81,9 +81,9 @@ func TestHybridWithoutEmbedderEqualsLexical(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/w/b"), "memory:b", "종목 추천 종목 종목")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:c", "/w/c"), "memory:c", "오늘 날씨 정보")
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 
-	hybrid, err := recaller.Recollect(ctx, "종목", "", 10)
+	hybrid, err := recaller.Recall(ctx, "종목", "", 10)
 	if err != nil {
 		t.Fatalf("hybrid recall without embedder errored: %v", err)
 	}
@@ -127,11 +127,11 @@ func TestHybridDeterministicOnEqualScores(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:1", "/w/1"), "memory:1", "beta one")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:2", "/w/2"), "memory:2", "beta two")
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 
-	var first []memory.Recollection
+	var first []memoriespkg.RecallResult
 	for i := range 5 {
-		got, err := recaller.Recollect(ctx, "beta", "", 10)
+		got, err := recaller.Recall(ctx, "beta", "", 10)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -149,8 +149,8 @@ func TestHybridDeterministicOnEqualScores(t *testing.T) {
 			}
 		}
 	}
-	// Deterministic tie-break is by MemoryID ascending (shared CreatedAt).
+	// Deterministic tie handling is by MemoryID ascending (shared CreatedAt).
 	if first[0].MemoryID != "memory:1" || first[1].MemoryID != "memory:2" {
-		t.Fatalf("tie-break order = [%q %q], want [memory:1 memory:2]", first[0].MemoryID, first[1].MemoryID)
+		t.Fatalf("tie order = [%q %q], want [memory:1 memory:2]", first[0].MemoryID, first[1].MemoryID)
 	}
 }

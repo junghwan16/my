@@ -16,7 +16,7 @@ import (
 // userDictCSV is the vendored, embedded user dictionary of domain/loan terms.
 // Embedding it keeps the single binary self-contained (no external file) and
 // pins the term set for reproducibility, matching ADR-0004's guidance to fix
-// the dictionary version behind the unchanged Tokenizer seam.
+// the dictionary version behind the unchanged Tokenizer contract.
 //
 //go:embed userdict.csv
 var userDictCSV string
@@ -36,15 +36,15 @@ func loadUserDict() (*dict.UserDict, error) {
 	return ud, nil
 }
 
-// Korean tokenizes text into lowercased morpheme surfaces. It satisfies
-// memory.Tokenizer.
+// Korean tokenizes text into lowercased morpheme forms. It satisfies
+// memories.Tokenizer.
 type Korean struct {
 	t *tokenizer.Tokenizer
 }
 
 // NewKorean builds a Korean tokenizer backed by the embedded mecab-ko-dic and
 // the embedded user dictionary of domain/loan terms. It loads the user
-// dictionary internally, so the memory.Tokenizer seam contract is unchanged and
+// dictionary internally, so the memories.Tokenizer contract is unchanged and
 // callers need no extra wiring.
 func NewKorean() (*Korean, error) {
 	ud, err := loadUserDict()
@@ -58,8 +58,8 @@ func NewKorean() (*Korean, error) {
 	return &Korean{t: t}, nil
 }
 
-// Tokenize returns the lowercased morpheme surfaces of text, dropping empties.
-// Splitting "종목을" into "종목"+"을" is what lets an FTS query for the bare noun
+// Tokenize returns the lowercased morpheme forms of text, dropping empties.
+// Splitting "종목을" into "종목"+"을" is what lets an FTS query for the noun
 // "종목" match text where it appears with an attached josa.
 func (k *Korean) Tokenize(text string) []string {
 	morphs := k.t.Tokenize(text)

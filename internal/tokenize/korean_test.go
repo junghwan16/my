@@ -44,20 +44,20 @@ func TestKoreanUserDictKeepsTermsWhole(t *testing.T) {
 // fragments (including super-frequent noise like "이"); with it the term is one
 // token. This is the precision improvement acceptance criterion of issue #8.
 func TestKoreanUserDictImprovesPrecision(t *testing.T) {
-	baseline, err := tokenizer.New(ko.Dict(), tokenizer.OmitBosEos())
+	plainTokenizer, err := tokenizer.New(ko.Dict(), tokenizer.OmitBosEos())
 	if err != nil {
-		t.Fatalf("baseline tokenizer: %v", err)
+		t.Fatalf("plain tokenizer: %v", err)
 	}
-	morphs := baseline.Tokenize("마이그레이션")
+	morphs := plainTokenizer.Tokenize("마이그레이션")
 	before := make([]string, 0, len(morphs))
 	for _, m := range morphs {
 		before = append(before, m.Surface)
 	}
 	if len(before) < 2 {
-		t.Fatalf("expected baseline to over-segment 마이그레이션, got %v", before)
+		t.Fatalf("expected plain tokenizer to over-segment 마이그레이션, got %v", before)
 	}
 	if !slices.Contains(before, "이") {
-		t.Fatalf("expected baseline fragments to include noise token %q, got %v", "이", before)
+		t.Fatalf("expected plain tokenizer fragments to include noise token %q, got %v", "이", before)
 	}
 
 	k, err := NewKorean()

@@ -1,4 +1,4 @@
-package memory
+package memories
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/junghwan16/gieok/internal/jsonutil"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 )
 
 // The store row-model mappings live in rows.go; the schema lives in the
@@ -37,7 +37,7 @@ const defaultSearchLimit = 20
 // Overridable per store via WithMinSimilarity.
 const defaultMinSimilarity = 0.40
 
-// Store records memories and their links back to sources, and maintains the
+// Store saves memories and their links back to sources, and maintains the
 // full-text index used for recall.
 type Store struct {
 	db            *bun.DB
@@ -71,8 +71,8 @@ func (s *Store) WithMinSimilarity(min float64) *Store {
 // WithEmbedder attaches an optional embedder that enables semantic recall: when
 // present, memory text is embedded on write and SearchSemantic can rank by
 // cosine similarity. Passing nil (the default) keeps semantic features off and
-// leaves lexical recall untouched, so an unreachable Ollama degrades gracefully
-// rather than failing. It returns the store for fluent wiring.
+// leaves lexical recall untouched when Ollama is unreachable rather than
+// failing. It returns the store for fluent wiring.
 func (s *Store) WithEmbedder(embedder Embedder) *Store {
 	s.embedder = embedder
 	return s
@@ -80,8 +80,8 @@ func (s *Store) WithEmbedder(embedder Embedder) *Store {
 
 // ReplaceSourceMemories atomically replaces every memory produced by one agent for a
 // source. Memories linked to the source by the same agent that are absent from the
-// new set are deleted, so re-ingesting a source never accumulates stale memories.
-func (s *Store) ReplaceSourceMemories(ctx context.Context, sourceID source.SourceID, agent string, memories []Memory, links []Link) error {
+// new set are deleted, so re-ingesting a source never accumulates old memories.
+func (s *Store) ReplaceSourceMemories(ctx context.Context, sourceID sourcespkg.SourceID, agent string, memories []Memory, links []Link) error {
 	// Embed OUTSIDE the write transaction. The embedder is a slow network call
 	// (a local Ollama round-trip); embedding inside the transaction held the
 	// SQLite write lock for its whole duration, so a second process touching the
@@ -89,7 +89,7 @@ func (s *Store) ReplaceSourceMemories(ctx context.Context, sourceID source.Sourc
 	// here, then the transaction only does fast local writes.
 	vectors := s.embedMemories(ctx, memories)
 	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if err := s.deleteStaleMemories(ctx, tx, sourceID, agent); err != nil {
+		if err := s.deletePreviousAgentMemories(ctx, tx, sourceID, agent); err != nil {
 			return err
 		}
 		if err := s.upsertMemories(ctx, tx, memories, vectors); err != nil {
@@ -115,36 +115,36 @@ func (s *Store) embedMemories(ctx context.Context, memories []Memory) map[Memory
 	return vectors
 }
 
-// deleteStaleMemories removes every memory (and its links and search rows) that
+// deletePreviousAgentMemories removes every memory (and its links and search rows) that
 // the agent previously produced for the source, so a re-ingest never accumulates
-// stale rows.
-func (s *Store) deleteStaleMemories(ctx context.Context, tx bun.Tx, sourceID source.SourceID, agent string) error {
-	var staleIDs []string
+// old rows.
+func (s *Store) deletePreviousAgentMemories(ctx context.Context, tx bun.Tx, sourceID sourcespkg.SourceID, agent string) error {
+	var previousIDs []string
 	if err := tx.NewSelect().
 		Model((*memoryRow)(nil)).
 		Column("memory.id").
 		Join("JOIN memory_links AS link ON link.memory_id = memory.id").
 		Where("link.source_id = ?", sourceID).
 		Where("memory.agent = ?", agent).
-		Scan(ctx, &staleIDs); err != nil {
-		return fmt.Errorf("load stale memories: %w", err)
+		Scan(ctx, &previousIDs); err != nil {
+		return fmt.Errorf("load previous memories: %w", err)
 	}
-	if len(staleIDs) == 0 {
+	if len(previousIDs) == 0 {
 		return nil
 	}
 	if _, err := tx.NewDelete().
 		Model((*linkRow)(nil)).
-		Where("memory_id IN (?)", bun.List(staleIDs)).
+		Where("memory_id IN (?)", bun.List(previousIDs)).
 		Exec(ctx); err != nil {
-		return fmt.Errorf("delete stale links: %w", err)
+		return fmt.Errorf("delete previous links: %w", err)
 	}
 	if _, err := tx.NewDelete().
 		Model((*memoryRow)(nil)).
-		Where("id IN (?)", bun.List(staleIDs)).
+		Where("id IN (?)", bun.List(previousIDs)).
 		Exec(ctx); err != nil {
-		return fmt.Errorf("delete stale memories: %w", err)
+		return fmt.Errorf("delete previous memories: %w", err)
 	}
-	return s.deleteFTS(ctx, tx, staleIDs)
+	return s.deleteFTS(ctx, tx, previousIDs)
 }
 
 func (s *Store) upsertMemories(ctx context.Context, tx bun.Tx, memories []Memory, vectors map[MemoryID][]float32) error {
@@ -221,13 +221,13 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	return stats, nil
 }
 
-// RecollectByID loads one memory by id and attaches its Source context, reusing
-// the same recollection-assembly path as recall so the shape matches. It reports
-// found=false (with a zero Recollection and no error) when no memory has the id,
+// RecallResultByID loads one memory by id and attaches its Source context, reusing
+// the same recall-result assembly path as recall so the structure matches. It reports
+// found=false (with a zero RecallResult and no error) when no memory has the id,
 // so callers can render a clean "not found" result. Scope is unrestricted: a get
 // by id fetches the memory wherever it lives, attaching every Source it derives
 // from.
-func (s *Store) RecollectByID(ctx context.Context, id MemoryID) (Recollection, bool, error) {
+func (s *Store) RecallResultByID(ctx context.Context, id MemoryID) (RecallResult, bool, error) {
 	var row memoryRow
 	err := s.db.NewSelect().
 		Model(&row).
@@ -235,23 +235,23 @@ func (s *Store) RecollectByID(ctx context.Context, id MemoryID) (Recollection, b
 		Scan(ctx)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return Recollection{}, false, nil
+			return RecallResult{}, false, nil
 		}
-		return Recollection{}, false, fmt.Errorf("load memory by id: %w", err)
+		return RecallResult{}, false, fmt.Errorf("load memory by id: %w", err)
 	}
 
-	recollections, err := s.attachSources(ctx, []Memory{row.toMemory()}, "")
+	recallResults, err := s.attachSources(ctx, []Memory{row.toMemory()}, "")
 	if err != nil {
-		return Recollection{}, false, err
+		return RecallResult{}, false, err
 	}
-	if len(recollections) == 0 {
-		return Recollection{}, false, nil
+	if len(recallResults) == 0 {
+		return RecallResult{}, false, nil
 	}
-	return recollections[0], true, nil
+	return recallResults[0], true, nil
 }
 
 // SourceHasAgentMemories reports whether a source already has memories from an agent.
-func (s *Store) SourceHasAgentMemories(ctx context.Context, sourceID source.SourceID, agent string) (bool, error) {
+func (s *Store) SourceHasAgentMemories(ctx context.Context, sourceID sourcespkg.SourceID, agent string) (bool, error) {
 	count, err := s.db.NewSelect().
 		Model((*memoryRow)(nil)).
 		Join("JOIN memory_links AS link ON link.memory_id = memory.id").
@@ -265,7 +265,7 @@ func (s *Store) SourceHasAgentMemories(ctx context.Context, sourceID source.Sour
 }
 
 // SourceMemories lists memories linked to a source.
-func (s *Store) SourceMemories(ctx context.Context, id source.SourceID) ([]Memory, error) {
+func (s *Store) SourceMemories(ctx context.Context, id sourcespkg.SourceID) ([]Memory, error) {
 	var rows []memoryRow
 	if err := s.db.NewSelect().
 		Model(&rows).
@@ -284,7 +284,7 @@ func (s *Store) SourceMemories(ctx context.Context, id source.SourceID) ([]Memor
 }
 
 // SourceLinks lists memory links for a source.
-func (s *Store) SourceLinks(ctx context.Context, id source.SourceID) ([]Link, error) {
+func (s *Store) SourceLinks(ctx context.Context, id sourcespkg.SourceID) ([]Link, error) {
 	var rows []linkRow
 	if err := s.db.NewSelect().
 		Model(&rows).
@@ -359,7 +359,7 @@ type candidateVector struct {
 // tens-of-thousands scale this store targets. Candidates below the floor are
 // dropped, so an out-of-domain query returns nothing rather than filling to
 // limit. It returns nil (no error) when no embedder is attached or the query
-// embeds empty, so callers fall back to lexical recall gracefully. Scope and
+// embeds empty, so callers can use lexical recall instead. Scope and
 // limit follow SearchMemories.
 func (s *Store) SearchSemantic(ctx context.Context, query, scope string, limit int) ([]Memory, error) {
 	if s.embedder == nil {
@@ -385,7 +385,7 @@ func (s *Store) SearchSemantic(ctx context.Context, query, scope string, limit i
 
 // loadCandidateVectors loads every in-scope memory that has a vector for the
 // embedder's current model, each with its raw embedding blob. Scope filtering
-// mirrors SearchMemories (memory_links → sources.scope_value).
+// mirrors SearchMemories (memory_links -> sources.scope_value).
 func (s *Store) loadCandidateVectors(ctx context.Context, scope string) ([]candidateVector, error) {
 	query := s.db.NewSelect().
 		Model((*candidateVector)(nil)).
@@ -447,10 +447,10 @@ func rankBySimilarity(queryVec []float32, candidates []candidateVector, limit in
 	return memories
 }
 
-// SearchRecollections returns memories matching query, ranked by FTS5 BM25 and
+// SearchRecallResults returns memories matching query, ranked by FTS5 BM25 and
 // restricted to scope, each carrying the Source context it was linked from. It
-// is the recall read surface the CLI and a future MCP tool share.
-func (s *Store) SearchRecollections(ctx context.Context, query, scope string, limit int) ([]Recollection, error) {
+// is the lexical recall read path.
+func (s *Store) SearchRecallResults(ctx context.Context, query, scope string, limit int) ([]RecallResult, error) {
 	memories, err := s.SearchMemories(ctx, query, scope, limit)
 	if err != nil {
 		return nil, err
@@ -458,11 +458,11 @@ func (s *Store) SearchRecollections(ctx context.Context, query, scope string, li
 	return s.attachSources(ctx, memories, scope)
 }
 
-// RecentRecollections returns the most recently created memories within scope,
+// RecentRecallResults returns the most recently created memories within scope,
 // each carrying its Source context. An empty scope spans every scope. It backs
 // recall when no task text is given, so the command doubles as a workspace
 // memory overview. A non-positive limit falls back to defaultSearchLimit.
-func (s *Store) RecentRecollections(ctx context.Context, scope string, limit int) ([]Recollection, error) {
+func (s *Store) RecentRecallResults(ctx context.Context, scope string, limit int) ([]RecallResult, error) {
 	if limit <= 0 {
 		limit = defaultSearchLimit
 	}
@@ -493,10 +493,10 @@ func (s *Store) RecentRecollections(ctx context.Context, scope string, limit int
 }
 
 // attachSources loads the Source context for each memory and returns
-// recollections in the same order as memories. When scope is non-empty, only
+// recall results in the same order as memories. When scope is non-empty, only
 // Sources in that scope are attached, so the recall never leaks a Memory's
 // out-of-scope provenance. Sources are ordered by Source ID for stable output.
-func (s *Store) attachSources(ctx context.Context, memories []Memory, scope string) ([]Recollection, error) {
+func (s *Store) attachSources(ctx context.Context, memories []Memory, scope string) ([]RecallResult, error) {
 	if len(memories) == 0 {
 		return nil, nil
 	}
@@ -523,13 +523,13 @@ func (s *Store) attachSources(ctx context.Context, memories []Memory, scope stri
 	if err := query.
 		Order("link.memory_id", "sr.id").
 		Scan(ctx, &refs); err != nil {
-		return nil, fmt.Errorf("load recollection sources: %w", err)
+		return nil, fmt.Errorf("load recall result sources: %w", err)
 	}
-	return assembleRecollections(memories, refs), nil
+	return assembleRecallResults(memories, refs), nil
 }
 
 // ReindexMemories rebuilds the full-text index from every stored memory. It is
-// idempotent and backfills memories recorded before the index existed.
+// safe to repeat and backfills memories saved before the index existed.
 func (s *Store) ReindexMemories(ctx context.Context) error {
 	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM memories_fts"); err != nil {
@@ -550,7 +550,7 @@ func (s *Store) ReindexMemories(ctx context.Context) error {
 
 // EnsureFTSIndexed backfills the index once when it is empty but memories exist,
 // so recall works on a store populated before the index was added. Once filled,
-// the write path keeps it in sync and this becomes a cheap no-op.
+// the write path keeps it in sync and this returns quickly.
 func (s *Store) EnsureFTSIndexed(ctx context.Context) error {
 	var ftsCount int
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM memories_fts").Scan(&ftsCount); err != nil {
@@ -583,16 +583,10 @@ func (s *Store) indexFTS(ctx context.Context, tx bun.Tx, mem Memory) error {
 	return nil
 }
 
-// indexVector replaces the embedding for one memory inside an open transaction.
-// It is a no-op when no embedder is attached, so the default (offline) build
-// never touches the vector table. When the embedder is present but the embed
-// call fails (e.g. Ollama went away mid-write), the stale vector is cleared and
-// the memory is left without one rather than failing the whole write; the
-// backfill re-embeds it on a later run once the embedder is healthy again.
 // writeVector replaces a memory's stored embedding inside the transaction. The
 // vector is precomputed outside the transaction (see embedMemories), so this
 // does only fast local writes and never holds the lock during an embed. A nil
-// vec (no embedder, or a skipped embed) just clears any stale row.
+// vec (no embedder, or a skipped embed) just clears any old row.
 func (s *Store) writeVector(ctx context.Context, tx bun.Tx, memID MemoryID, vec []float32) error {
 	if s.embedder == nil {
 		return nil
@@ -617,7 +611,7 @@ func (s *Store) writeVector(ctx context.Context, tx bun.Tx, memID MemoryID, vec 
 // embedTolerant embeds text and reports whether a usable vector came back. An
 // embed error or empty vector yields ok=false, so callers skip the vector
 // (keeping semantic recall optional) instead of failing the surrounding write.
-// The error is deliberately swallowed here: fallback is the contract.
+// The error is deliberately swallowed here: skipping the vector is the contract.
 func embedTolerant(ctx context.Context, embedder Embedder, text string) (vec []float32, ok bool) {
 	vec, err := embedder.Embed(ctx, text)
 	if err != nil || len(vec) == 0 {
@@ -627,8 +621,8 @@ func embedTolerant(ctx context.Context, embedder Embedder, text string) (vec []f
 }
 
 // EnsureVectorsIndexed backfills embeddings for memories that lack a current
-// vector (never embedded, or embedded by a different model). It is idempotent
-// and a no-op when no embedder is attached, mirroring EnsureFTSIndexed. Embed
+// vector (never embedded, or embedded by a different model). It is safe to repeat
+// and returns quickly when no embedder is attached, mirroring EnsureFTSIndexed. Embed
 // failures for individual memories are skipped, so a transient Ollama outage
 // leaves the rest indexed and lexical recall unaffected.
 func (s *Store) EnsureVectorsIndexed(ctx context.Context) error {
@@ -677,7 +671,7 @@ func (s *Store) deleteFTS(ctx context.Context, tx bun.Tx, ids []string) error {
 		return nil
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM memories_fts WHERE memory_id IN (?)", bun.List(ids)); err != nil {
-		return fmt.Errorf("delete stale fts rows: %w", err)
+		return fmt.Errorf("delete previous fts rows: %w", err)
 	}
 	return nil
 }

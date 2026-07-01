@@ -1,4 +1,4 @@
-package source
+package sources
 
 import (
 	"context"
@@ -13,20 +13,20 @@ import (
 
 // The store schema and row-model mappings live in schema.go.
 
-// Store records imported sources and their normalized events.
+// Store saves imported Sources and their normalized events.
 type Store struct {
 	db *bun.DB
 }
 
-var _ Recorder = (*Store)(nil)
+var _ SourceWriter = (*Store)(nil)
 
 // NewStore returns a source store backed by an already-open database.
 func NewStore(db *bun.DB) *Store {
 	return &Store{db: db}
 }
 
-// RecordSource replaces a source and all of its events atomically.
-func (s *Store) RecordSource(ctx context.Context, source Source, events []SourceEvent) error {
+// SaveSource replaces a source and all of its events atomically.
+func (s *Store) SaveSource(ctx context.Context, source Source, events []SourceEvent) error {
 	if len(source.MetadataJSON) == 0 {
 		source.MetadataJSON = jsonutil.EmptyObject()
 	}
@@ -50,7 +50,7 @@ func (s *Store) RecordSource(ctx context.Context, source Source, events []Source
 			Set("scope_value = EXCLUDED.scope_value").
 			Set("started_at = EXCLUDED.started_at").
 			Set("ended_at = EXCLUDED.ended_at").
-			Set("recorded_at = EXCLUDED.recorded_at").
+			Set("imported_at = EXCLUDED.imported_at").
 			Set("metadata_json = EXCLUDED.metadata_json").
 			Exec(ctx); err != nil {
 			return fmt.Errorf("upsert source: %w", err)
@@ -88,12 +88,12 @@ func (s *Store) Source(ctx context.Context, id SourceID) (Source, error) {
 	return row.toSource(), nil
 }
 
-// Sources lists all recorded sources in stable import order.
+// Sources lists all saved Sources in stable import order.
 func (s *Store) Sources(ctx context.Context) ([]Source, error) {
 	var rows []sourceRow
 	if err := s.db.NewSelect().
 		Model(&rows).
-		Order("recorded_at", "id").
+		Order("imported_at", "id").
 		Scan(ctx); err != nil {
 		return nil, fmt.Errorf("load sources: %w", err)
 	}

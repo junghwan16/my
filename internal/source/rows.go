@@ -1,4 +1,4 @@
-package source
+package sources
 
 import (
 	"time"
@@ -9,7 +9,7 @@ import (
 )
 
 // These row models map onto the sources and source_events tables. The schema
-// that creates and evolves them lives in the migrate package's ledger; keep the
+// that creates and evolves them lives in internal/migrate; keep the
 // column tags here in sync with those migrations.
 
 type sourceRow struct {
@@ -23,7 +23,7 @@ type sourceRow struct {
 	ScopeValue    string    `bun:"scope_value,notnull"`
 	StartedAt     time.Time `bun:"started_at,nullzero"`
 	EndedAt       time.Time `bun:"ended_at,nullzero"`
-	RecordedAt    time.Time `bun:"recorded_at,notnull"`
+	ImportedAt    time.Time `bun:"imported_at,notnull"`
 	MetadataJSON  string    `bun:"metadata_json,notnull"`
 }
 
@@ -52,7 +52,7 @@ func newSourceRow(source Source) *sourceRow {
 		ScopeValue:    source.Scope.Value,
 		StartedAt:     source.StartedAt,
 		EndedAt:       source.EndedAt,
-		RecordedAt:    source.RecordedAt,
+		ImportedAt:    source.ImportedAt,
 		MetadataJSON:  string(source.MetadataJSON),
 	}
 }
@@ -69,7 +69,7 @@ func (r sourceRow) toSource() Source {
 		},
 		StartedAt:    r.StartedAt,
 		EndedAt:      r.EndedAt,
-		RecordedAt:   r.RecordedAt,
+		ImportedAt:   r.ImportedAt,
 		MetadataJSON: []byte(r.MetadataJSON),
 	}
 }

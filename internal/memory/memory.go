@@ -1,12 +1,12 @@
-// Package memory turns imported sources into curated, reusable memory. It
+// Package memories turns imported sources into reusable memory. It
 // depends on the source package (ingest reads sources) but never the reverse.
-package memory
+package memories
 
 import (
 	"encoding/json"
 	"time"
 
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 )
 
 // MemoryID uniquely identifies a generated memory.
@@ -25,7 +25,7 @@ type LinkKind string
 const LinkKindSourceIngest LinkKind = "source_ingest"
 
 // Memory is an agent-produced memory record. Every Memory derives from at least
-// one source, recorded as a Link.
+// one source, stored as a Link.
 type Memory struct {
 	ID           MemoryID        `json:"id"`
 	Agent        string          `json:"agent"`
@@ -37,9 +37,9 @@ type Memory struct {
 
 // Link connects a source to an agent-produced memory.
 type Link struct {
-	SourceID     source.SourceID `json:"source_id"`
-	MemoryID     MemoryID        `json:"memory_id"`
-	Kind         LinkKind        `json:"kind"`
-	CreatedAt    time.Time       `json:"created_at"`
-	MetadataJSON json.RawMessage `json:"metadata_json"`
+	SourceID     sourcespkg.SourceID `json:"source_id"`
+	MemoryID     MemoryID            `json:"memory_id"`
+	Kind         LinkKind            `json:"kind"`
+	CreatedAt    time.Time           `json:"created_at"`
+	MetadataJSON json.RawMessage     `json:"metadata_json"`
 }

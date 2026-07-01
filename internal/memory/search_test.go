@@ -1,4 +1,4 @@
-package memory_test
+package memories_test
 
 import (
 	"context"
@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 	"github.com/junghwan16/gieok/internal/migrate"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 	"github.com/junghwan16/gieok/internal/tokenize"
 )
@@ -22,7 +22,7 @@ func TestSearchReturnsOnlyMatchingMemory(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "코스피 종목 분석 리포트")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/b"), "memory:b", "오늘 날씨 정보")
 
-	got, err := memory.NewRecaller(memories).Search(ctx, "종목", "", 10)
+	got, err := memoriespkg.NewRecaller(memories).Search(ctx, "종목", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestSearchFiltersByScope(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/b"), "memory:b", "종목 추천")
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 
 	scoped, err := recaller.Search(ctx, "종목", "/work/a", 10)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestSearchRespectsLimit(t *testing.T) {
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/a"), "memory:b", "종목 둘")
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:c", "/work/a"), "memory:c", "종목 셋")
 
-	got, err := memory.NewRecaller(memories).Search(ctx, "종목", "", 2)
+	got, err := memoriespkg.NewRecaller(memories).Search(ctx, "종목", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestSearchEmptyQueryReturnsNothing(t *testing.T) {
 
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 	for _, q := range []string{"", "   "} {
 		got, err := recaller.Search(ctx, q, "", 10)
 		if err != nil {
@@ -106,21 +106,21 @@ func TestSearchReflectsReplacedMemory(t *testing.T) {
 	src := scopedSource("codex_session:a", "/work/a")
 	recordMemory(ctx, t, sources, memories, src, "memory:v1", "종목 분석")
 
-	recaller := memory.NewRecaller(memories)
+	recaller := memoriespkg.NewRecaller(memories)
 	if got, err := recaller.Search(ctx, "종목", "", 10); err != nil || len(got) != 1 {
 		t.Fatalf("before replace: got %d err %v, want 1", len(got), err)
 	}
 
-	// Replace agent "t"'s memory for the source; the stale FTS row must go too.
+	// Replace agent "t"'s memory for the source; the old FTS row must go too.
 	now := time.Date(2026, 7, 1, 13, 0, 0, 0, time.UTC)
-	newMem := memory.Memory{ID: "memory:v2", Agent: "t", Kind: memory.MemoryKindSummary, Text: "날씨 정보", CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
-	newLink := memory.Link{SourceID: src.ID, MemoryID: newMem.ID, Kind: memory.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
-	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memory.Memory{newMem}, []memory.Link{newLink}); err != nil {
+	newMem := memoriespkg.Memory{ID: "memory:v2", Agent: "t", Kind: memoriespkg.MemoryKindSummary, Text: "날씨 정보", CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+	newLink := memoriespkg.Link{SourceID: src.ID, MemoryID: newMem.ID, Kind: memoriespkg.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{newMem}, []memoriespkg.Link{newLink}); err != nil {
 		t.Fatal(err)
 	}
 
 	if got, err := recaller.Search(ctx, "종목", "", 10); err != nil || len(got) != 0 {
-		t.Fatalf("after replace, stale query: got %d err %v, want 0", len(got), err)
+		t.Fatalf("after replace, old query: got %d err %v, want 0", len(got), err)
 	}
 	if got, err := recaller.Search(ctx, "날씨", "", 10); err != nil || len(got) != 1 {
 		t.Fatalf("after replace, new query: got %d err %v, want 1", len(got), err)
@@ -141,8 +141,8 @@ func TestEnsureFTSIndexedBackfillsExistingMemories(t *testing.T) {
 	if err := migrate.Apply(ctx, db, "unused"); err != nil {
 		t.Fatal(err)
 	}
-	sources := source.NewStore(db)
-	memories := memory.NewStore(db, spaceTokenizer{})
+	sources := sourcespkg.NewStore(db)
+	memories := memoriespkg.NewStore(db, spaceTokenizer{})
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
 
 	// Simulate a store populated before the index existed.
@@ -162,7 +162,7 @@ func TestEnsureFTSIndexedBackfillsExistingMemories(t *testing.T) {
 }
 
 // TestSearchWithKoreanMorphologyMatchesInflectedText is the headline regression:
-// the bare noun "종목" must recall text where it appears with an attached josa
+// the noun "종목" must recall text where it appears with an attached josa
 // ("종목을"). A naive whitespace/trigram index cannot do this — only morphological
 // tokenization splits "종목을" into "종목"+"을".
 func TestSearchWithKoreanMorphologyMatchesInflectedText(t *testing.T) {
@@ -176,7 +176,7 @@ func TestSearchWithKoreanMorphologyMatchesInflectedText(t *testing.T) {
 
 	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:ko", "/work/ko"), "memory:ko", "코스피 종목을 분석했다")
 
-	got, err := memory.NewRecaller(memories).Search(ctx, "종목", "", 10)
+	got, err := memoriespkg.NewRecaller(memories).Search(ctx, "종목", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,27 +185,27 @@ func TestSearchWithKoreanMorphologyMatchesInflectedText(t *testing.T) {
 	}
 }
 
-func scopedSource(id source.SourceID, scope string) source.Source {
-	return source.Source{
+func scopedSource(id sourcespkg.SourceID, scope string) sourcespkg.Source {
+	return sourcespkg.Source{
 		ID:            id,
-		Kind:          source.SourceKindCodexSession,
+		Kind:          sourcespkg.SourceKindCodexSession,
 		URI:           "memory://test/" + string(id),
 		ContentSHA256: "hash-" + string(id),
-		Scope:         source.Scope{Kind: source.ScopeKindWorkspace, Value: scope},
-		RecordedAt:    time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		Scope:         sourcespkg.Scope{Kind: sourcespkg.ScopeKindWorkspace, Value: scope},
+		ImportedAt:    time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
 		MetadataJSON:  json.RawMessage(`{}`),
 	}
 }
 
-func recordMemory(ctx context.Context, t *testing.T, sources *source.Store, memories *memory.Store, src source.Source, memID, text string) {
+func recordMemory(ctx context.Context, t *testing.T, sources *sourcespkg.Store, memories *memoriespkg.Store, src sourcespkg.Source, memID, text string) {
 	t.Helper()
-	if err := sources.RecordSource(ctx, src, nil); err != nil {
+	if err := sources.SaveSource(ctx, src, nil); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
-	mem := memory.Memory{ID: memory.MemoryID(memID), Agent: "t", Kind: memory.MemoryKindSummary, Text: text, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
-	link := memory.Link{SourceID: src.ID, MemoryID: mem.ID, Kind: memory.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
-	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memory.Memory{mem}, []memory.Link{link}); err != nil {
+	mem := memoriespkg.Memory{ID: memoriespkg.MemoryID(memID), Agent: "t", Kind: memoriespkg.MemoryKindSummary, Text: text, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+	link := memoriespkg.Link{SourceID: src.ID, MemoryID: mem.ID, Kind: memoriespkg.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{mem}, []memoriespkg.Link{link}); err != nil {
 		t.Fatal(err)
 	}
 }

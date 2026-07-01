@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/junghwan16/gieok/internal/memory"
+	memoriespkg "github.com/junghwan16/gieok/internal/memory"
 	"github.com/junghwan16/gieok/internal/migrate"
-	"github.com/junghwan16/gieok/internal/source"
+	sourcespkg "github.com/junghwan16/gieok/internal/source"
 	"github.com/junghwan16/gieok/internal/storage"
 	"github.com/junghwan16/gieok/internal/tokenize"
 )
@@ -40,7 +40,7 @@ func TestMemoryRecallReturnsRelevantMemoryInScope(t *testing.T) {
 	if bPos >= 0 && bPos < aPos {
 		t.Fatalf("stdout = %q, want lexical match memory:a ranked above memory:b", stdout)
 	}
-	if !strings.Contains(stdout, "source codex_session:a") || !strings.Contains(stdout, "scope=/work/project") {
+	if !strings.Contains(stdout, "from source codex_session:a") || !strings.Contains(stdout, "scope=/work/project") {
 		t.Fatalf("stdout = %q, want source context", stdout)
 	}
 }
@@ -74,7 +74,7 @@ func TestMemoryRecallRespectsLimit(t *testing.T) {
 	seedMemory(ctx, t, dbPath, "codex_session:c", "/work/a", "memory:c", "종목 셋")
 
 	stdout, _ := runRecall(ctx, t, dbPath, "종목", "--scope", "/work/a", "--limit", "2")
-	if !strings.Contains(stdout, "recalled 2 memory") {
+	if !strings.Contains(stdout, "found 2 memory") {
 		t.Fatalf("stdout = %q, want limit honored", stdout)
 	}
 }
@@ -89,7 +89,7 @@ func TestMemoryRecallWithoutTaskReturnsRecentMemoryInScope(t *testing.T) {
 	seedMemoryAt(ctx, t, dbPath, "codex_session:other", "/work/b", "memory:other", "다른 스코프", time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC))
 
 	stdout, _ := runRecall(ctx, t, dbPath, "", "--scope", "/work/a", "--limit", "1")
-	if !strings.Contains(stdout, "recalled 1 memory") || !strings.Contains(stdout, "memory:new") {
+	if !strings.Contains(stdout, "found 1 memory") || !strings.Contains(stdout, "memory:new") {
 		t.Fatalf("recent recall = %q, want most recent in-scope memory:new", stdout)
 	}
 	if strings.Contains(stdout, "memory:other") {
@@ -108,7 +108,7 @@ func TestMemoryRecallEmptyResultIsExplicit(t *testing.T) {
 	seedMemory(ctx, t, dbPath, "codex_session:a", "/work/a", "memory:a", "종목 분석")
 
 	stdout, _ := runRecall(ctx, t, dbPath, "날씨", "--scope", "/work/empty")
-	if !strings.Contains(stdout, "no memory recalled") {
+	if !strings.Contains(stdout, "no matching memory") {
 		t.Fatalf("stdout = %q, want explicit empty result", stdout)
 	}
 }
@@ -146,7 +146,7 @@ func TestMemoryRecallJSONCarriesSemanticFields(t *testing.T) {
 		t.Fatalf("json memories = %d, want 1", len(result.Memories))
 	}
 	got := result.Memories[0]
-	if got.MemoryID != "memory:a" || got.Agent != "t" || got.Kind != string(memory.MemoryKindSummary) {
+	if got.MemoryID != "memory:a" || got.Agent != "t" || got.Kind != string(memoriespkg.MemoryKindSummary) {
 		t.Fatalf("json memory identity = %+v, want memory:a/t/summary", got)
 	}
 	if got.CreatedAt == "" || got.Text == "" {
@@ -244,12 +244,12 @@ func runRecall(ctx context.Context, t *testing.T, dbPath, task string, extra ...
 	return stdout.String(), stderr.String()
 }
 
-func seedMemory(ctx context.Context, t *testing.T, dbPath string, srcID source.SourceID, scope, memID, text string) {
+func seedMemory(ctx context.Context, t *testing.T, dbPath string, srcID sourcespkg.SourceID, scope, memID, text string) {
 	t.Helper()
 	seedMemoryAt(ctx, t, dbPath, srcID, scope, memID, text, time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC))
 }
 
-func seedMemoryAt(ctx context.Context, t *testing.T, dbPath string, srcID source.SourceID, scope, memID, text string, at time.Time) {
+func seedMemoryAt(ctx context.Context, t *testing.T, dbPath string, srcID sourcespkg.SourceID, scope, memID, text string, at time.Time) {
 	t.Helper()
 	db, err := storage.OpenSQLite(dbPath)
 	if err != nil {
@@ -267,37 +267,37 @@ func seedMemoryAt(ctx context.Context, t *testing.T, dbPath string, srcID source
 	if err != nil {
 		t.Fatal(err)
 	}
-	sources := source.NewStore(db)
-	memories := memory.NewStore(db, tok)
+	sources := sourcespkg.NewStore(db)
+	memories := memoriespkg.NewStore(db, tok)
 
-	src := source.Source{
+	src := sourcespkg.Source{
 		ID:            srcID,
-		Kind:          source.SourceKindCodexSession,
+		Kind:          sourcespkg.SourceKindCodexSession,
 		URI:           "memory://test/" + string(srcID),
 		ContentSHA256: "hash-" + string(srcID),
-		Scope:         source.Scope{Kind: source.ScopeKindWorkspace, Value: scope},
-		RecordedAt:    at,
+		Scope:         sourcespkg.Scope{Kind: sourcespkg.ScopeKindWorkspace, Value: scope},
+		ImportedAt:    at,
 		MetadataJSON:  json.RawMessage(`{}`),
 	}
-	if err := sources.RecordSource(ctx, src, nil); err != nil {
+	if err := sources.SaveSource(ctx, src, nil); err != nil {
 		t.Fatal(err)
 	}
-	mem := memory.Memory{
-		ID:           memory.MemoryID(memID),
+	mem := memoriespkg.Memory{
+		ID:           memoriespkg.MemoryID(memID),
 		Agent:        "t",
-		Kind:         memory.MemoryKindSummary,
+		Kind:         memoriespkg.MemoryKindSummary,
 		Text:         text,
 		CreatedAt:    at,
 		MetadataJSON: json.RawMessage(`{}`),
 	}
-	link := memory.Link{
+	link := memoriespkg.Link{
 		SourceID:     src.ID,
 		MemoryID:     mem.ID,
-		Kind:         memory.LinkKindSourceIngest,
+		Kind:         memoriespkg.LinkKindSourceIngest,
 		CreatedAt:    at,
 		MetadataJSON: json.RawMessage(`{}`),
 	}
-	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memory.Memory{mem}, []memory.Link{link}); err != nil {
+	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{mem}, []memoriespkg.Link{link}); err != nil {
 		t.Fatal(err)
 	}
 }
