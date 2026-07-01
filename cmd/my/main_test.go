@@ -265,5 +265,13 @@ func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, 
 		closeStore()
 		t.Fatal(err)
 	}
-	return source.NewStore(db), memory.NewStore(db), closeStore
+	return source.NewStore(db), memory.NewStore(db, spaceTokenizer{}), closeStore
+}
+
+// spaceTokenizer is a whitespace tokenizer used only to satisfy NewStore in
+// these CLI tests, which read back memory rather than searching it.
+type spaceTokenizer struct{}
+
+func (spaceTokenizer) Tokenize(text string) []string {
+	return strings.Fields(strings.ToLower(text))
 }

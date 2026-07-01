@@ -16,6 +16,7 @@ import (
 	"github.com/junghwan16/my/internal/migrate"
 	"github.com/junghwan16/my/internal/source"
 	"github.com/junghwan16/my/internal/storage"
+	"github.com/junghwan16/my/internal/tokenize"
 )
 
 func main() {
@@ -56,7 +57,15 @@ func withStores(ctx context.Context, path string, fn func(*source.Store, *memory
 	if err = migrate.Apply(ctx, db, path); err != nil {
 		return err
 	}
-	return fn(source.NewStore(db), memory.NewStore(db))
+	tokenizer, err := tokenize.NewKorean()
+	if err != nil {
+		return fmt.Errorf("build korean tokenizer: %w", err)
+	}
+	memories := memory.NewStore(db, tokenizer)
+	if err = memories.EnsureFTSIndexed(ctx); err != nil {
+		return err
+	}
+	return fn(source.NewStore(db), memories)
 }
 
 func runMemoryImport(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, now time.Time) error {

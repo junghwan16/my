@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,6 +258,11 @@ func TestIngestSkipExistingSkipsAlreadyIngestedAgents(t *testing.T) {
 
 func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, *memory.Store, func()) {
 	t.Helper()
+	return openStoresWith(ctx, t, path, spaceTokenizer{})
+}
+
+func openStoresWith(ctx context.Context, t *testing.T, path string, tok memory.Tokenizer) (*source.Store, *memory.Store, func()) {
+	t.Helper()
 	db, err := storage.OpenSQLite(path)
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +276,16 @@ func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, 
 		closeStore()
 		t.Fatal(err)
 	}
-	return source.NewStore(db), memory.NewStore(db), closeStore
+	return source.NewStore(db), memory.NewStore(db, tok), closeStore
+}
+
+// spaceTokenizer is a deterministic whitespace tokenizer for behavior tests. It
+// deliberately does no morphology, so tests that need real Korean tokenization
+// use the tokenize package instead.
+type spaceTokenizer struct{}
+
+func (spaceTokenizer) Tokenize(text string) []string {
+	return strings.Fields(strings.ToLower(text))
 }
 
 type ingestResult struct {

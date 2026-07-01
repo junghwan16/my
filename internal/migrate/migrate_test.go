@@ -27,8 +27,8 @@ func TestApplyCreatesSchemaAndRecordsVersion(t *testing.T) {
 	if !tableExists(ctx, t, db, "memory_links") {
 		t.Fatal("memory_links table missing after Apply")
 	}
-	if got := dbVersion(ctx, t, db); got != 2 {
-		t.Fatalf("db version = %d, want 2", got)
+	if got, want := dbVersion(ctx, t, db), targetVersion(ctx, t, db); got != want {
+		t.Fatalf("db version = %d, want %d (fully migrated)", got, want)
 	}
 	// A fresh database (started at version 0) is not backed up.
 	if _, err := os.Stat(path + ".bak-v0"); !os.IsNotExist(err) {
@@ -49,8 +49,8 @@ func TestApplyIsIdempotent(t *testing.T) {
 	if err := Apply(ctx, db, path); err != nil {
 		t.Fatalf("second Apply returned error: %v", err)
 	}
-	if got := dbVersion(ctx, t, db); got != 2 {
-		t.Fatalf("db version = %d, want 2", got)
+	if got, want := dbVersion(ctx, t, db), targetVersion(ctx, t, db); got != want {
+		t.Fatalf("db version = %d, want %d (fully migrated)", got, want)
 	}
 }
 
@@ -80,8 +80,8 @@ func TestApplyBacksUpAlreadyVersionedDatabase(t *testing.T) {
 	if _, err := os.Stat(path + ".bak-v1"); err != nil {
 		t.Fatalf("expected backup at %s.bak-v1: %v", path, err)
 	}
-	if got := dbVersion(ctx, t, db); got != 2 {
-		t.Fatalf("db version = %d, want 2", got)
+	if got, want := dbVersion(ctx, t, db), targetVersion(ctx, t, db); got != want {
+		t.Fatalf("db version = %d, want %d (fully migrated)", got, want)
 	}
 }
 
@@ -109,6 +109,21 @@ func dbVersion(ctx context.Context, t *testing.T, db *bun.DB) int64 {
 		t.Fatal(err)
 	}
 	return version
+}
+
+// targetVersion is the highest embedded migration version, so tests assert
+// "fully migrated" without hardcoding a count that every new migration breaks.
+func targetVersion(ctx context.Context, t *testing.T, db *bun.DB) int64 {
+	t.Helper()
+	provider, err := newProvider(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, target, err := provider.GetVersions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return target
 }
 
 func tableExists(ctx context.Context, t *testing.T, db *bun.DB, name string) bool {
