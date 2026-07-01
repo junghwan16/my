@@ -16,6 +16,8 @@ type MemoryReader interface {
 	SearchRecollections(ctx context.Context, query, scope string, limit int) ([]Recollection, error)
 	HybridRecollections(ctx context.Context, query, scope string, limit int) ([]Recollection, error)
 	RecentRecollections(ctx context.Context, scope string, limit int) ([]Recollection, error)
+	RecollectByID(ctx context.Context, id MemoryID) (Recollection, bool, error)
+	Stats(ctx context.Context) (Stats, error)
 }
 
 // Recaller finds relevant memory. It recalls by source, and searches memory
@@ -71,4 +73,18 @@ func (r *Recaller) Recollect(ctx context.Context, task, scope string, limit int)
 		return r.store.RecentRecollections(ctx, scope, limit)
 	}
 	return r.store.HybridRecollections(ctx, task, scope, limit)
+}
+
+// Get fetches one Memory by id and attaches its Source context, reusing the
+// shared recollection shape so the MCP get tool matches recall. found is false
+// (with a zero Recollection and no error) when no Memory has the id, so callers
+// render a clean "not found" rather than surfacing an error.
+func (r *Recaller) Get(ctx context.Context, id MemoryID) (Recollection, bool, error) {
+	return r.store.RecollectByID(ctx, id)
+}
+
+// Stats reports recall index health (memory, vector, and full-text index
+// counts) so the MCP status tool can surface it. It delegates to the store.
+func (r *Recaller) Stats(ctx context.Context) (Stats, error) {
+	return r.store.Stats(ctx)
 }

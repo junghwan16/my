@@ -1,10 +1,12 @@
 // Package mcp exposes the memory store to LLM agents over the Model Context
-// Protocol. It runs an MCP server on stdio with a single recall tool that
-// recalls recorded Memory within an optional Scope and returns ranked results,
-// each carrying the Source context it derives from.
+// Protocol. It runs an MCP server on stdio with three tools: recall (rank Memory
+// for a natural-language query within an optional Scope), status (report recall
+// index health), and get (fetch one Memory by id). Each recalled or fetched
+// Memory carries the Source context it derives from.
 //
-// The tool reuses the shared recall seam (memory.Recaller.Recollect), the same
-// one the `my memory recall` CLI uses, so both surfaces return the same shape.
+// The tools reuse the shared recall seams on memory.Recaller (Recollect, Stats,
+// Get), the same ones the `my memory recall` CLI uses, so every surface returns
+// the same shape.
 package mcp
 
 import (
@@ -25,18 +27,24 @@ const (
 )
 
 // recaller finds relevant Memory within a Scope and attaches the Source context
-// each Memory derives from. *memory.Recaller satisfies it, so the tool reuses
-// the recall engine rather than re-implementing search or source resolution.
+// each Memory derives from, reports recall index health, and fetches one Memory
+// by id. *memory.Recaller satisfies it, so the tools reuse the recall engine
+// rather than re-implementing search or source resolution.
 type recaller interface {
 	Recollect(ctx context.Context, task, scope string, limit int) ([]memory.Recollection, error)
+	Stats(ctx context.Context) (memory.Stats, error)
+	Get(ctx context.Context, id memory.MemoryID) (memory.Recollection, bool, error)
 }
 
-// Server serves the recall tool over MCP.
+// compile-time check that *memory.Recaller satisfies the consumed interface.
+var _ recaller = (*memory.Recaller)(nil)
+
+// Server serves the recall, status, and get tools over MCP.
 type Server struct {
 	recaller recaller
 }
 
-// NewServer wires a recall server over the shared recall seam.
+// NewServer wires a recall server over the shared recall seams.
 func NewServer(recaller recaller) *Server {
 	return &Server{recaller: recaller}
 }
@@ -129,9 +137,73 @@ func describe(r memory.Recollection) RecalledMemory {
 	}
 }
 
-// Run registers the recall tool and serves it over the given transport until the
-// client disconnects or the context is cancelled. Callers pass an
-// *mcpsdk.StdioTransport to serve over stdio.
+// StatusInput is the status tool's input. The tool takes no parameters; the
+// empty struct gives the SDK a schema to bind to.
+type StatusInput struct{}
+
+// StatusOutput is the status tool's structured result: the recall index health
+// counts. A healthy store has Vectors and FTSRows close to Memories.
+type StatusOutput struct {
+	Memories int `json:"memories"`
+	Vectors  int `json:"vectors"`
+	FTSRows  int `json:"fts_rows"`
+}
+
+// Status runs the status tool: it reports recall index health (memory, vector,
+// and full-text index row counts). It reuses the shared Stats seam and is
+// exported so tests can exercise the handler without a stdio round-trip.
+func (s *Server) Status(ctx context.Context, _ StatusInput) (StatusOutput, error) {
+	stats, err := s.recaller.Stats(ctx)
+	if err != nil {
+		return StatusOutput{}, fmt.Errorf("status: %w", err)
+	}
+	return StatusOutput{
+		Memories: stats.Memories,
+		Vectors:  stats.Vectors,
+		FTSRows:  stats.FTSRows,
+	}, nil
+}
+
+// GetInput is the get tool's input: the Memory identifier to fetch.
+type GetInput struct {
+	MemoryID string `json:"memory_id" jsonschema:"the Memory identifier to fetch"`
+}
+
+// GetOutput is the get tool's structured result. Found reports whether a Memory
+// with the requested id exists; when false, Memory is absent and Message
+// explains the miss so a client renders a clean "not found".
+type GetOutput struct {
+	Found   bool            `json:"found"`
+	Message string          `json:"message,omitempty"`
+	Memory  *RecalledMemory `json:"memory,omitempty"`
+}
+
+// errEmptyMemoryID is returned when get is called without a memory_id.
+var errEmptyMemoryID = errors.New("get requires a non-empty memory_id")
+
+// Get runs the get tool: it fetches one Memory by id in the same per-memory
+// shape recall uses, carrying every Source it derives from. A missing id yields
+// a found=false result with a message rather than an error. It reuses the shared
+// Get seam and is exported so tests can exercise the handler directly.
+func (s *Server) Get(ctx context.Context, in GetInput) (GetOutput, error) {
+	if in.MemoryID == "" {
+		return GetOutput{}, errEmptyMemoryID
+	}
+
+	recollection, found, err := s.recaller.Get(ctx, memory.MemoryID(in.MemoryID))
+	if err != nil {
+		return GetOutput{}, fmt.Errorf("get: %w", err)
+	}
+	if !found {
+		return GetOutput{Found: false, Message: "no memory found for id " + in.MemoryID}, nil
+	}
+	got := describe(recollection)
+	return GetOutput{Found: true, Memory: &got}, nil
+}
+
+// Run registers the recall, status, and get tools and serves them over the given
+// transport until the client disconnects or the context is cancelled. Callers
+// pass an *mcpsdk.StdioTransport to serve over stdio.
 func (s *Server) Run(ctx context.Context, transport mcpsdk.Transport) error {
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: serverName, Version: serverVersion}, nil)
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
@@ -141,6 +213,26 @@ func (s *Server) Run(ctx context.Context, transport mcpsdk.Transport) error {
 		out, err := s.Recall(ctx, in)
 		if err != nil {
 			return nil, RecallOutput{}, err
+		}
+		return nil, out, nil
+	})
+	mcpsdk.AddTool(server, &mcpsdk.Tool{
+		Name:        "status",
+		Description: "Report recall index health: the number of stored memories, embedding vectors, and full-text index rows. A large gap between memories and vectors or fts_rows flags an index that needs a backfill.",
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in StatusInput) (*mcpsdk.CallToolResult, StatusOutput, error) {
+		out, err := s.Status(ctx, in)
+		if err != nil {
+			return nil, StatusOutput{}, err
+		}
+		return nil, out, nil
+	})
+	mcpsdk.AddTool(server, &mcpsdk.Tool{
+		Name:        "get",
+		Description: "Fetch one Memory by its identifier in the same shape recall returns: memory id, agent, kind, text, creation time, and the Sources it derives from. Returns found=false with a message when no Memory has the id.",
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetInput) (*mcpsdk.CallToolResult, GetOutput, error) {
+		out, err := s.Get(ctx, in)
+		if err != nil {
+			return nil, GetOutput{}, err
 		}
 		return nil, out, nil
 	})

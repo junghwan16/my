@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -191,6 +193,61 @@ func (s *Store) upsertLinks(ctx context.Context, tx bun.Tx, links []Link) error 
 		}
 	}
 	return nil
+}
+
+// Stats reports recall index health: how many memories are stored, how many of
+// them carry an embedding vector, and how many rows the full-text index holds.
+// A healthy store has Vectors and FTSRows close to Memories; a large gap flags
+// an index that needs a backfill (EnsureVectorsIndexed / EnsureFTSIndexed).
+type Stats struct {
+	Memories int
+	Vectors  int
+	FTSRows  int
+}
+
+// Stats counts the memories, embedding vectors, and full-text index rows so the
+// MCP status tool can report recall index health.
+func (s *Store) Stats(ctx context.Context) (Stats, error) {
+	var stats Stats
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM memories").Scan(&stats.Memories); err != nil {
+		return Stats{}, fmt.Errorf("count memories: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM memory_vectors").Scan(&stats.Vectors); err != nil {
+		return Stats{}, fmt.Errorf("count memory vectors: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM memories_fts").Scan(&stats.FTSRows); err != nil {
+		return Stats{}, fmt.Errorf("count fts rows: %w", err)
+	}
+	return stats, nil
+}
+
+// RecollectByID loads one memory by id and attaches its Source context, reusing
+// the same recollection-assembly path as recall so the shape matches. It reports
+// found=false (with a zero Recollection and no error) when no memory has the id,
+// so callers can render a clean "not found" result. Scope is unrestricted: a get
+// by id fetches the memory wherever it lives, attaching every Source it derives
+// from.
+func (s *Store) RecollectByID(ctx context.Context, id MemoryID) (Recollection, bool, error) {
+	var row memoryRow
+	err := s.db.NewSelect().
+		Model(&row).
+		Where("memory.id = ?", string(id)).
+		Scan(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Recollection{}, false, nil
+		}
+		return Recollection{}, false, fmt.Errorf("load memory by id: %w", err)
+	}
+
+	recollections, err := s.attachSources(ctx, []Memory{row.toMemory()}, "")
+	if err != nil {
+		return Recollection{}, false, err
+	}
+	if len(recollections) == 0 {
+		return Recollection{}, false, nil
+	}
+	return recollections[0], true, nil
 }
 
 // SourceHasAgentMemories reports whether a source already has memories from an agent.

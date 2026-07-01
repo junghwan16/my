@@ -17,9 +17,11 @@
   - Scope는 기본적으로 현재 작업 디렉터리에서 파생됩니다. `--scope`로 다른 워크스페이스를, `--all-scopes`로 전체 Scope를 조회합니다.
   - 기본 출력은 사람이 읽는 형식(Memory ID·agent·kind·시각·본문·Source 컨텍스트)입니다. `--json`은 MCP `recall` 툴과 공유하는 구조화 결과 모델을 냅니다.
 - **`my mcp [serve] [--store <db>]`**
-  - stdio 위에서 도는 MCP 서버를 실행합니다. Claude Code 같은 MCP 클라이언트가 붙어 메모리를 Recall 할 수 있습니다.
+  - stdio 위에서 도는 MCP 서버를 실행합니다. Claude Code 같은 MCP 클라이언트가 붙어 메모리를 Recall 할 수 있습니다. 노출 툴: `recall`, `status`, `get`.
   - `recall` 툴: `query`(필수), `scope`(선택), `limit`(선택)을 받아 CLI recall과 동일한 seam(`memory.Recaller.Recollect`, 어휘+의미 RRF 하이브리드)을 통과시켜 랭킹된 Memory를 구조화 결과로 반환합니다.
   - 각 결과는 `memory_id`, `agent`, `kind`, `text`, `created`와, Memory가 파생된 여러 Source를 담는 `sources` 배열(각 항목 `id` / `uri` / `scope{kind,value}`)을 담습니다. CLI recall의 `--json` 모델과 동일한 shape입니다.
+  - `status` 툴: 입력 없이 recall 인덱스 건강도를 반환합니다 — `memories`(저장된 Memory 수), `vectors`(임베딩 벡터 수), `fts_rows`(전문 인덱스 행 수). 벡터/FTS 수가 Memory 수와 크게 벌어지면 백필이 필요하다는 신호입니다.
+  - `get` 툴: `memory_id`(필수)로 Memory 하나를 조회해 recall과 동일한 per-Memory shape(`memory_id`, `agent`, `kind`, `text`, `created`, `sources[]`)으로 반환합니다. 해당 id가 없으면 `found=false`와 설명 `message`를 냅니다.
 기본 저장 위치: `~/.local/share/my/memory/my.db`
 
 ## 세션 자동 캡처
