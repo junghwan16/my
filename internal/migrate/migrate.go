@@ -1,7 +1,12 @@
-// Package migrate owns the schema for the local SQLite store. GORM applies the
-// regular table schema from Go models, while SQLite-only objects such as FTS5
-// are created with explicit SQL. The domain packages (source, memory) keep only
-// row models and queries.
+// Package migrate owns the schema for the local SQLite store. It applies the
+// schema with explicit, idempotent DDL (CREATE TABLE IF NOT EXISTS) rather than
+// an ORM auto-migration: GORM's SQLite auto-migrate rebuilt an existing table
+// through a __temp copy whenever it thought a column or constraint differed, and
+// that copy could misalign columns and blow up a NOT NULL constraint on a legacy
+// store (e.g. source_events.event_index, memory_links.memory_id). CREATE TABLE
+// IF NOT EXISTS never rewrites a populated table, so an upgrade only adds what is
+// missing and leaves existing rows untouched. The domain packages (source,
+// memory) keep only row models and queries.
 package migrate
 
 import (
@@ -9,14 +14,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
+	"os"
 	"time"
-
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-	"gorm.io/gorm/schema"
-
-	"github.com/glebarez/sqlite"
 )
 
 const (
@@ -24,67 +23,185 @@ const (
 	schemaVersion = int64(6)
 )
 
+// tableDef is one managed table: the idempotent DDL that creates it and its
+// indexes, and the columns the shape check expects to find. The DDL is the
+// single source of truth for the schema, and columns is derived from the same
+// definition so the shape check cannot silently drift from what applySchema
+// creates.
+type tableDef struct {
+	name    string
+	columns []string
+	ddl     []string // executed in order; every statement is idempotent
+}
+
+// managedTables lists every regular table in foreign-key dependency order, so a
+// referenced table (sources, memories) is always created before the table that
+// references it (source_events, memory_links, memory_relations, memory_vectors).
+// The full-text index memories_fts is a virtual table created separately (see
+// createMemoryFTS).
+var managedTables = []tableDef{
+	{
+		name:    "schema_versions",
+		columns: []string{"name", "version", "updated_at"},
+		ddl: []string{`CREATE TABLE IF NOT EXISTS schema_versions (
+	name TEXT PRIMARY KEY,
+	version INTEGER NOT NULL,
+	updated_at TEXT NOT NULL
+)`},
+	},
+	{
+		name:    "sources",
+		columns: []string{"id", "kind", "uri", "content_sha256", "scope_kind", "scope_value", "started_at", "ended_at", "imported_at", "metadata_json"},
+		ddl: []string{
+			`CREATE TABLE IF NOT EXISTS sources (
+	id TEXT PRIMARY KEY,
+	kind TEXT NOT NULL,
+	uri TEXT NOT NULL,
+	content_sha256 TEXT NOT NULL,
+	scope_kind TEXT NOT NULL,
+	scope_value TEXT NOT NULL,
+	started_at TEXT,
+	ended_at TEXT,
+	imported_at TEXT NOT NULL,
+	metadata_json TEXT NOT NULL
+)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS sources_kind_hash_idx ON sources (kind, content_sha256)`,
+		},
+	},
+	{
+		name:    "source_events",
+		columns: []string{"source_id", "event_index", "line", "at", "type", "turn_id", "role", "text", "payload_json", "raw_json"},
+		ddl: []string{`CREATE TABLE IF NOT EXISTS source_events (
+	source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+	event_index INTEGER NOT NULL,
+	line INTEGER NOT NULL,
+	at TEXT,
+	type TEXT NOT NULL,
+	turn_id TEXT NOT NULL DEFAULT '',
+	role TEXT NOT NULL DEFAULT '',
+	text TEXT NOT NULL DEFAULT '',
+	payload_json TEXT NOT NULL,
+	raw_json TEXT NOT NULL,
+	PRIMARY KEY (source_id, event_index)
+)`},
+	},
+	{
+		name:    "memories",
+		columns: []string{"id", "agent", "kind", "text", "created_at", "metadata_json"},
+		ddl: []string{
+			`CREATE TABLE IF NOT EXISTS memories (
+	id TEXT PRIMARY KEY,
+	agent TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	text TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	metadata_json TEXT NOT NULL
+)`,
+			`CREATE INDEX IF NOT EXISTS memories_agent_idx ON memories (agent)`,
+		},
+	},
+	{
+		name:    "memory_links",
+		columns: []string{"source_id", "memory_id", "kind", "created_at", "metadata_json"},
+		ddl: []string{`CREATE TABLE IF NOT EXISTS memory_links (
+	source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+	memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+	kind TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	metadata_json TEXT NOT NULL,
+	PRIMARY KEY (source_id, memory_id, kind)
+)`},
+	},
+	{
+		name:    "memory_relations",
+		columns: []string{"from_memory_id", "to_memory_id", "kind", "created_at", "metadata_json"},
+		ddl: []string{
+			`CREATE TABLE IF NOT EXISTS memory_relations (
+	from_memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+	to_memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+	kind TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	metadata_json TEXT NOT NULL,
+	PRIMARY KEY (from_memory_id, to_memory_id, kind)
+)`,
+			`CREATE INDEX IF NOT EXISTS memory_relations_to_idx ON memory_relations (to_memory_id)`,
+		},
+	},
+	{
+		name:    "memory_vectors",
+		columns: []string{"memory_id", "model", "dim", "vector"},
+		ddl: []string{`CREATE TABLE IF NOT EXISTS memory_vectors (
+	memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+	model TEXT NOT NULL,
+	dim INTEGER NOT NULL,
+	vector BLOB NOT NULL
+)`},
+	},
+}
+
 // Apply brings db up to the latest schema version. Before changing an existing
 // local memory store it snapshots the file, so user memory can be restored if a
 // migration fails.
 func Apply(ctx context.Context, db *sql.DB, dbPath string) error {
-	gormDB, err := openGORM(db)
-	if err != nil {
-		return err
-	}
-
-	current, err := currentVersion(ctx, gormDB, db)
+	current, err := currentVersion(ctx, db)
 	if err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 
-	shapeCurrent, err := schemaShapeCurrent(ctx, gormDB)
+	shapeCurrent, err := schemaShapeCurrent(ctx, db)
 	if err != nil {
 		return err
 	}
 	if shapeCurrent {
-		// The physical schema already matches the latest models; only the
-		// version ledger is behind (e.g. a legacy store, or a prior run that
-		// applied the schema but failed to record the version). Stamp the
-		// version without the costly backup + rewrite.
+		// The physical schema already matches the latest definition; only the
+		// version ledger is behind (a legacy store, or a prior run that applied
+		// the schema but failed to record the version). Stamp the version without
+		// the costly backup + DDL pass.
 		if current < schemaVersion {
-			return recordVersion(ctx, gormDB)
+			return recordVersion(ctx, db)
 		}
 		return nil
 	}
 
-	if hasExistingStore(ctx, gormDB) {
+	existing, err := hasExistingStore(ctx, db)
+	if err != nil {
+		return err
+	}
+	if existing {
 		if err := backup(ctx, db, dbPath, current); err != nil {
 			return err
 		}
 	}
-	if err := applySchema(ctx, gormDB, db); err != nil {
+	if err := applySchema(ctx, db); err != nil {
 		return err
 	}
-	return recordVersion(ctx, gormDB)
+	return recordVersion(ctx, db)
 }
 
-func openGORM(db *sql.DB) (*gorm.DB, error) {
-	gormDB, err := gorm.Open(sqlite.Dialector{Conn: db}, &gorm.Config{
-		DisableForeignKeyConstraintWhenMigrating: false,
-		Logger:                                   logger.Default.LogMode(logger.Silent),
-	})
+// currentVersion reads the recorded schema version from the schema_versions
+// ledger, falling back to the legacy goose ledger, and 0 when neither records a
+// version.
+func currentVersion(ctx context.Context, db *sql.DB) (int64, error) {
+	exists, err := tableExists(ctx, db, "schema_versions")
 	if err != nil {
-		return nil, fmt.Errorf("open gorm migrator: %w", err)
+		return 0, err
 	}
-	return gormDB, nil
-}
-
-func currentVersion(ctx context.Context, gormDB *gorm.DB, db *sql.DB) (int64, error) {
-	if gormDB.WithContext(ctx).Migrator().HasTable(&schemaState{}) {
-		var state schemaState
-		err := gormDB.WithContext(ctx).First(&state, "name = ?", schemaName).Error
+	if exists {
+		var version sql.NullInt64
+		err := db.QueryRowContext(ctx,
+			"SELECT version FROM schema_versions WHERE name = ?", schemaName,
+		).Scan(&version)
 		if err == nil {
-			return state.Version, nil
+			if version.Valid {
+				return version.Int64, nil
+			}
+			return 0, nil
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return 0, err
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("read schema version row: %w", err)
 		}
+		// The ledger exists but has no row for this schema yet; fall through to
+		// the legacy check.
 	}
 	return legacyGooseVersion(ctx, db)
 }
@@ -111,42 +228,33 @@ func legacyGooseVersion(ctx context.Context, db *sql.DB) (int64, error) {
 }
 
 // schemaShapeCurrent reports whether the physical database already has every
-// table and column the current models declare. The models are the single
-// source of truth, so the expected columns are derived from them rather than
-// listed by hand — the check cannot drift when a model changes.
-func schemaShapeCurrent(ctx context.Context, gormDB *gorm.DB) (bool, error) {
-	gormDB = gormDB.WithContext(ctx)
-	migrator := gormDB.Migrator()
-	for _, model := range []any{
-		&schemaState{},
-		&sourceModel{},
-		&sourceEventModel{},
-		&memoryModel{},
-		&memoryLinkModel{},
-		&memoryRelationModel{},
-		&memoryVectorModel{},
-	} {
-		if !migrator.HasTable(model) {
+// managed table (plus the FTS index) and every column those tables declare. It
+// lets Apply skip the backup and DDL pass when only the version ledger is behind.
+func schemaShapeCurrent(ctx context.Context, db *sql.DB) (bool, error) {
+	for _, table := range managedTables {
+		exists, err := tableExists(ctx, db, table.name)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
 			return false, nil
 		}
-		sch, err := schema.Parse(model, &sync.Map{}, gormDB.NamingStrategy)
-		if err != nil {
-			return false, fmt.Errorf("parse model schema for shape check: %w", err)
-		}
-		for _, column := range sch.DBNames {
-			if !migrator.HasColumn(model, column) {
+		for _, column := range table.columns {
+			has, err := columnExists(ctx, db, table.name, column)
+			if err != nil {
+				return false, err
+			}
+			if !has {
 				return false, nil
 			}
 		}
 	}
-	if !migrator.HasTable("memories_fts") {
-		return false, nil
-	}
-	return true, nil
+	return tableExists(ctx, db, "memories_fts")
 }
 
-func hasExistingStore(ctx context.Context, gormDB *gorm.DB) bool {
-	migrator := gormDB.WithContext(ctx).Migrator()
+// hasExistingStore reports whether any known table is already present, so a
+// fresh database is not needlessly backed up.
+func hasExistingStore(ctx context.Context, db *sql.DB) (bool, error) {
 	for _, table := range []string{
 		"sources",
 		"source_events",
@@ -158,36 +266,38 @@ func hasExistingStore(ctx context.Context, gormDB *gorm.DB) bool {
 		"schema_versions",
 		"goose_db_version",
 	} {
-		if migrator.HasTable(table) {
-			return true
+		exists, err := tableExists(ctx, db, table)
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-func applySchema(ctx context.Context, gormDB *gorm.DB, db *sql.DB) error {
+// applySchema creates every managed table, index, and the FTS virtual table with
+// idempotent DDL. Existing tables are left as they are — only missing objects are
+// created — so upgrading a populated store never rewrites or corrupts its data.
+func applySchema(ctx context.Context, db *sql.DB) error {
 	if err := renameImportedAt(ctx, db); err != nil {
 		return err
 	}
-
-	err := gormDB.WithContext(ctx).AutoMigrate(
-		&schemaState{},
-		&sourceModel{},
-		&sourceEventModel{},
-		&memoryModel{},
-		&memoryLinkModel{},
-		&memoryRelationModel{},
-		&memoryVectorModel{},
-	)
-	if err != nil {
-		return fmt.Errorf("apply gorm schema: %w", err)
+	for _, table := range managedTables {
+		for _, stmt := range table.ddl {
+			if _, err := db.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("create %s schema: %w", table.name, err)
+			}
+		}
 	}
-	if err := createMemoryFTS(ctx, db); err != nil {
-		return err
-	}
-	return nil
+	return createMemoryFTS(ctx, db)
 }
 
+// renameImportedAt migrates the pre-rename sources column recorded_at to
+// imported_at. It runs before the CREATE statements so the shape check and
+// inserts see the current column name. A plain column rename preserves the data,
+// unlike a table rebuild.
 func renameImportedAt(ctx context.Context, db *sql.DB) error {
 	sources, err := tableExists(ctx, db, "sources")
 	if err != nil {
@@ -225,13 +335,15 @@ func createMemoryFTS(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func recordVersion(ctx context.Context, gormDB *gorm.DB) error {
-	state := schemaState{
-		Name:      schemaName,
-		Version:   schemaVersion,
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	if err := gormDB.WithContext(ctx).Save(&state).Error; err != nil {
+// recordVersion stamps the current schema version into the ledger, upserting the
+// single row keyed by schemaName.
+func recordVersion(ctx context.Context, db *sql.DB) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO schema_versions (name, version, updated_at) VALUES (?, ?, ?)
+	ON CONFLICT(name) DO UPDATE SET version = excluded.version, updated_at = excluded.updated_at`,
+		schemaName, schemaVersion, now,
+	); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	return nil
@@ -239,6 +351,11 @@ func recordVersion(ctx context.Context, gormDB *gorm.DB) error {
 
 func backup(ctx context.Context, db *sql.DB, dbPath string, fromVersion int64) error {
 	backupPath := fmt.Sprintf("%s.bak-v%d", dbPath, fromVersion)
+	// VACUUM INTO refuses to overwrite, so a stale backup from a prior aborted
+	// run would block every retry. Remove it first so the migration can proceed.
+	if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale backup %s: %w", backupPath, err)
+	}
 	// VACUUM INTO writes a consistent snapshot even under WAL, unlike a plain
 	// file copy that could miss the -wal contents. It cannot run inside a transaction.
 	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", backupPath); err != nil {
@@ -286,110 +403,4 @@ func columnExists(ctx context.Context, db *sql.DB, table string, column string) 
 		return false, fmt.Errorf("iterate columns for %s: %w", table, err)
 	}
 	return false, nil
-}
-
-type schemaState struct {
-	Name      string `gorm:"column:name;type:text;primaryKey"`
-	Version   int64  `gorm:"column:version;not null"`
-	UpdatedAt string `gorm:"column:updated_at;type:text;not null"`
-}
-
-func (schemaState) TableName() string {
-	return "schema_versions"
-}
-
-type sourceModel struct {
-	ID            string             `gorm:"column:id;type:text;primaryKey"`
-	Kind          string             `gorm:"column:kind;type:text;not null;uniqueIndex:sources_kind_hash_idx,priority:1"`
-	URI           string             `gorm:"column:uri;type:text;not null"`
-	ContentSHA256 string             `gorm:"column:content_sha256;type:text;not null;uniqueIndex:sources_kind_hash_idx,priority:2"`
-	ScopeKind     string             `gorm:"column:scope_kind;type:text;not null"`
-	ScopeValue    string             `gorm:"column:scope_value;type:text;not null"`
-	StartedAt     time.Time          `gorm:"column:started_at;type:text"`
-	EndedAt       time.Time          `gorm:"column:ended_at;type:text"`
-	ImportedAt    time.Time          `gorm:"column:imported_at;type:text;not null"`
-	MetadataJSON  string             `gorm:"column:metadata_json;type:text;not null"`
-	Events        []sourceEventModel `gorm:"foreignKey:SourceID;references:ID;constraint:OnDelete:CASCADE"`
-}
-
-func (sourceModel) TableName() string {
-	return "sources"
-}
-
-type sourceEventModel struct {
-	SourceID    string      `gorm:"column:source_id;type:text;primaryKey"`
-	Index       int         `gorm:"column:event_index;primaryKey"`
-	Line        int         `gorm:"column:line;not null"`
-	At          time.Time   `gorm:"column:at;type:text"`
-	Type        string      `gorm:"column:type;type:text;not null"`
-	TurnID      string      `gorm:"column:turn_id;type:text;not null;default:''"`
-	Role        string      `gorm:"column:role;type:text;not null;default:''"`
-	Text        string      `gorm:"column:text;type:text;not null;default:''"`
-	PayloadJSON string      `gorm:"column:payload_json;type:text;not null"`
-	RawJSON     string      `gorm:"column:raw_json;type:text;not null"`
-	Source      sourceModel `gorm:"foreignKey:SourceID;references:ID;constraint:OnDelete:CASCADE"`
-}
-
-func (sourceEventModel) TableName() string {
-	return "source_events"
-}
-
-type memoryModel struct {
-	ID           string            `gorm:"column:id;type:text;primaryKey"`
-	Agent        string            `gorm:"column:agent;type:text;not null;index:memories_agent_idx"`
-	Kind         string            `gorm:"column:kind;type:text;not null"`
-	Text         string            `gorm:"column:text;type:text;not null"`
-	CreatedAt    time.Time         `gorm:"column:created_at;type:text;not null"`
-	MetadataJSON string            `gorm:"column:metadata_json;type:text;not null"`
-	Links        []memoryLinkModel `gorm:"foreignKey:MemoryID;references:ID;constraint:OnDelete:CASCADE"`
-}
-
-func (memoryModel) TableName() string {
-	return "memories"
-}
-
-type memoryLinkModel struct {
-	SourceID     string      `gorm:"column:source_id;type:text;primaryKey"`
-	MemoryID     string      `gorm:"column:memory_id;type:text;primaryKey"`
-	Kind         string      `gorm:"column:kind;type:text;primaryKey"`
-	CreatedAt    time.Time   `gorm:"column:created_at;type:text;not null"`
-	MetadataJSON string      `gorm:"column:metadata_json;type:text;not null"`
-	Source       sourceModel `gorm:"foreignKey:SourceID;references:ID;constraint:OnDelete:CASCADE"`
-	Memory       memoryModel `gorm:"foreignKey:MemoryID;references:ID;constraint:OnDelete:CASCADE"`
-}
-
-func (memoryLinkModel) TableName() string {
-	return "memory_links"
-}
-
-// memoryRelationModel is a directed Memory->Memory relation (issue #16). Unlike a
-// memory_link (Source->Memory provenance), a relation connects a new Memory to an
-// existing one the agent chose to build on. Both endpoints cascade on delete, so
-// deleting either Memory leaves no dangling relation. The kind column is a fixed
-// "relates" today but is part of the primary key so future relation types can
-// coexist between the same pair without a schema change.
-type memoryRelationModel struct {
-	FromMemoryID string      `gorm:"column:from_memory_id;type:text;primaryKey"`
-	ToMemoryID   string      `gorm:"column:to_memory_id;type:text;primaryKey;index:memory_relations_to_idx"`
-	Kind         string      `gorm:"column:kind;type:text;primaryKey"`
-	CreatedAt    time.Time   `gorm:"column:created_at;type:text;not null"`
-	MetadataJSON string      `gorm:"column:metadata_json;type:text;not null"`
-	From         memoryModel `gorm:"foreignKey:FromMemoryID;references:ID;constraint:OnDelete:CASCADE"`
-	To           memoryModel `gorm:"foreignKey:ToMemoryID;references:ID;constraint:OnDelete:CASCADE"`
-}
-
-func (memoryRelationModel) TableName() string {
-	return "memory_relations"
-}
-
-type memoryVectorModel struct {
-	MemoryID string      `gorm:"column:memory_id;type:text;primaryKey"`
-	Model    string      `gorm:"column:model;type:text;not null"`
-	Dim      int         `gorm:"column:dim;not null"`
-	Vector   []byte      `gorm:"column:vector;type:blob;not null"`
-	Memory   memoryModel `gorm:"foreignKey:MemoryID;references:ID;constraint:OnDelete:CASCADE"`
-}
-
-func (memoryVectorModel) TableName() string {
-	return "memory_vectors"
 }
