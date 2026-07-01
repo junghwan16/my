@@ -15,13 +15,17 @@
   - 현재 Scope 안에서 task에 관련된 Memory를 다시 떠올립니다. Recall은 raw 세션 검색이 아니라 ingest된 Memory를 재사용하는 도메인 액션입니다.
   - task 텍스트는 positional 또는 `--task`로 전달합니다. 관련 랭킹은 한국어 형태소 토큰화 + FTS5(BM25)입니다(ADR 0004). task를 생략하면 Scope 안의 최근 Memory를 반환합니다.
   - Scope는 기본적으로 현재 작업 디렉터리에서 파생됩니다. `--scope`로 다른 워크스페이스를, `--all-scopes`로 전체 Scope를 조회합니다.
-  - 기본 출력은 사람이 읽는 형식(Memory ID·agent·kind·시각·본문·Source 컨텍스트)입니다. `--json`은 future MCP `memory.recall`과 공유하는 구조화 결과 모델을 냅니다.
+  - 기본 출력은 사람이 읽는 형식(Memory ID·agent·kind·시각·본문·Source 컨텍스트)입니다. `--json`은 MCP `recall` 툴과 공유하는 구조화 결과 모델을 냅니다.
+- **`my mcp [serve] [--store <db>]`**
+  - stdio 위에서 도는 MCP 서버를 실행합니다. Claude Code 같은 MCP 클라이언트가 붙어 메모리를 Recall 할 수 있습니다.
+  - `recall` 툴: `query`(필수), `scope`(선택), `limit`(선택)을 받아 CLI recall과 동일한 seam(`memory.Recaller.Recollect`, 한국어 형태소 + FTS5)을 통과시켜 랭킹된 Memory를 구조화 결과로 반환합니다.
+  - 각 결과는 `memory_id`, `agent`, `kind`, `text`, `created`와, Memory가 파생된 여러 Source를 담는 `sources` 배열(각 항목 `id` / `uri` / `scope{kind,value}`)을 담습니다. CLI recall의 `--json` 모델과 동일한 shape입니다.
 
 기본 저장 위치: `~/.local/share/my/memory/my.db`
 
 ## 로드맵 (미구현)
 
 - **Graph 메모리**: 현재는 source→Memory 링크만 저장합니다. Memory 간 그래프 링크는 스키마 설계가 필요한 후속 작업입니다.
-- **MCP 서버**(`internal/mcp`): LLM 에이전트가 메모리를 조회·기록하는 인터페이스. 현재 placeholder.
+- **MCP 기록(record) 툴**: 현재 MCP 서버는 Recall(`recall` 툴)만 노출합니다. 에이전트가 MCP를 통해 Memory를 직접 기록하는 인터페이스는 후속 작업입니다.
 - **Claude Code hooks**를 통한 세션 자동 ingest.
 - **Agent Loop**: 루프 엔지니어링 가시성 도구 및 내장 루프 에이전트.

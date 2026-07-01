@@ -12,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/junghwan16/my/internal/mcp"
 	"github.com/junghwan16/my/internal/memory"
 	"github.com/junghwan16/my/internal/migrate"
 	"github.com/junghwan16/my/internal/source"
@@ -27,7 +30,25 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, now time.Time) error {
-	if len(args) < 2 || args[0] != "memory" {
+	if len(args) < 1 {
+		return errUsage
+	}
+
+	switch args[0] {
+	case "memory":
+		return runMemory(ctx, args, stdout, stderr, now)
+	case "mcp":
+		return runMCP(ctx, args, stderr)
+	default:
+		return errUsage
+	}
+}
+
+// errUsage is the top-level usage error.
+var errUsage = errors.New("usage: my <memory|mcp>")
+
+func runMemory(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, now time.Time) error {
+	if len(args) < 2 {
 		return errors.New("usage: my memory <import|ingest|recall>")
 	}
 
@@ -281,6 +302,41 @@ func recallScope(scope string, allScopes bool) (string, error) {
 		return "", fmt.Errorf("resolve current workspace scope: %w", err)
 	}
 	return cwd, nil
+}
+
+// runMCP serves the memory recall tool over MCP on stdio. It parses an optional
+// serve subcommand and --store flag, then blocks serving until the client
+// disconnects or ctx is cancelled.
+func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
+	storePath, err := parseMCPConfig(args, stderr)
+	if err != nil {
+		return err
+	}
+
+	return withStores(ctx, storePath, func(_ *source.Store, memories *memory.Store) error {
+		server := mcp.NewServer(memory.NewRecaller(memories))
+		return server.Run(ctx, &mcpsdk.StdioTransport{})
+	})
+}
+
+// parseMCPConfig accepts "my mcp [serve] [--store <path>]" and resolves the
+// store path, defaulting to the shared import/ingest store.
+func parseMCPConfig(args []string, stderr io.Writer) (string, error) {
+	flagArgs := args[1:]
+	if len(flagArgs) > 0 && flagArgs[0] == "serve" {
+		flagArgs = flagArgs[1:]
+	}
+
+	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	storePath := flags.String("store", "", "SQLite memory store path")
+	if err := flags.Parse(flagArgs); err != nil {
+		return "", err
+	}
+	if *storePath != "" {
+		return *storePath, nil
+	}
+	return defaultStorePath()
 }
 
 type memoryImportConfig struct {

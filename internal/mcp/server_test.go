@@ -1,0 +1,182 @@
+package mcp_test
+
+import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/junghwan16/my/internal/mcp"
+	"github.com/junghwan16/my/internal/memory"
+	"github.com/junghwan16/my/internal/migrate"
+	"github.com/junghwan16/my/internal/source"
+	"github.com/junghwan16/my/internal/storage"
+	"github.com/junghwan16/my/internal/tokenize"
+
+	"github.com/uptrace/bun"
+)
+
+func TestRecallReturnsRankedMemoryWithSource(t *testing.T) {
+	ctx := context.Background()
+	sources, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
+	defer closeStores()
+
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "코스피 종목 분석 리포트")
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/b"), "memory:b", "오늘 날씨 정보")
+
+	server := mcp.NewServer(memory.NewRecaller(memories))
+
+	out, err := server.Recall(ctx, mcp.RecallInput{Query: "종목"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Memories) != 1 {
+		t.Fatalf("recalled %d memories, want 1 (only the matching one)", len(out.Memories))
+	}
+
+	got := out.Memories[0]
+	if got.MemoryID != "memory:a" {
+		t.Fatalf("memory id = %q, want memory:a", got.MemoryID)
+	}
+	if got.Text != "코스피 종목 분석 리포트" {
+		t.Fatalf("text = %q, want the recorded memory text", got.Text)
+	}
+	if got.Agent != "t" || got.Kind != string(memory.MemoryKindSummary) {
+		t.Fatalf("agent/kind = %q/%q, want t/summary", got.Agent, got.Kind)
+	}
+	if got.Created == "" {
+		t.Fatal("created is empty, want an RFC3339 timestamp")
+	}
+	if len(got.Sources) != 1 {
+		t.Fatalf("sources = %d, want 1", len(got.Sources))
+	}
+	src := got.Sources[0]
+	if src.ID != "codex_session:a" {
+		t.Fatalf("source id = %q, want codex_session:a", src.ID)
+	}
+	if src.URI != "memory://test/codex_session:a" {
+		t.Fatalf("source uri = %q, want the source URI", src.URI)
+	}
+	if src.Scope.Value != "/work/a" {
+		t.Fatalf("source scope value = %q, want /work/a", src.Scope.Value)
+	}
+	if src.Scope.Kind != string(source.ScopeKindWorkspace) {
+		t.Fatalf("source scope kind = %q, want workspace", src.Scope.Kind)
+	}
+}
+
+func TestRecallHonorsScope(t *testing.T) {
+	ctx := context.Background()
+	sources, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
+	defer closeStores()
+
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 분석")
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/b"), "memory:b", "종목 추천")
+
+	server := mcp.NewServer(memory.NewRecaller(memories))
+
+	scoped, err := server.Recall(ctx, mcp.RecallInput{Query: "종목", Scope: "/work/a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scoped.Memories) != 1 || scoped.Memories[0].MemoryID != "memory:a" {
+		t.Fatalf("scoped recall = %#v, want single memory:a", scoped.Memories)
+	}
+
+	all, err := server.Recall(ctx, mcp.RecallInput{Query: "종목"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Memories) != 2 {
+		t.Fatalf("unscoped recall = %d, want 2", len(all.Memories))
+	}
+}
+
+func TestRecallHonorsLimit(t *testing.T) {
+	ctx := context.Background()
+	sources, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
+	defer closeStores()
+
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:a", "/work/a"), "memory:a", "종목 하나")
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:b", "/work/a"), "memory:b", "종목 둘")
+	recordMemory(ctx, t, sources, memories, scopedSource("codex_session:c", "/work/a"), "memory:c", "종목 셋")
+
+	server := mcp.NewServer(memory.NewRecaller(memories))
+
+	out, err := server.Recall(ctx, mcp.RecallInput{Query: "종목", Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Memories) != 2 {
+		t.Fatalf("recalled %d memories, want 2 (limit honored)", len(out.Memories))
+	}
+}
+
+func TestRecallEmptyQueryErrors(t *testing.T) {
+	ctx := context.Background()
+	_, memories, closeStores := openStores(ctx, t, filepath.Join(t.TempDir(), "m.db"))
+	defer closeStores()
+
+	server := mcp.NewServer(memory.NewRecaller(memories))
+
+	if _, err := server.Recall(ctx, mcp.RecallInput{Query: ""}); err == nil {
+		t.Fatal("empty query returned no error, want an error")
+	}
+}
+
+// --- store-backed test helpers (mirror internal/memory test setup) ---
+
+func openStores(ctx context.Context, t *testing.T, path string) (*source.Store, *memory.Store, func()) {
+	t.Helper()
+	tok, err := tokenize.NewKorean()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return openStoresWith(ctx, t, path, tok)
+}
+
+func openStoresWith(ctx context.Context, t *testing.T, path string, tok memory.Tokenizer) (*source.Store, *memory.Store, func()) {
+	t.Helper()
+	db, err := storage.OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate.Apply(ctx, db, path); err != nil {
+		t.Fatal(err)
+	}
+	return source.NewStore(db), memory.NewStore(db, tok), closeDB(t, db)
+}
+
+func closeDB(t *testing.T, db *bun.DB) func() {
+	return func() {
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func scopedSource(id source.SourceID, scope string) source.Source {
+	return source.Source{
+		ID:            id,
+		Kind:          source.SourceKindCodexSession,
+		URI:           "memory://test/" + string(id),
+		ContentSHA256: "hash-" + string(id),
+		Scope:         source.Scope{Kind: source.ScopeKindWorkspace, Value: scope},
+		RecordedAt:    time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		MetadataJSON:  json.RawMessage(`{}`),
+	}
+}
+
+func recordMemory(ctx context.Context, t *testing.T, sources *source.Store, memories *memory.Store, src source.Source, memID, text string) {
+	t.Helper()
+	if err := sources.RecordSource(ctx, src, nil); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
+	mem := memory.Memory{ID: memory.MemoryID(memID), Agent: "t", Kind: memory.MemoryKindSummary, Text: text, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+	link := memory.Link{SourceID: src.ID, MemoryID: mem.ID, Kind: memory.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
+	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memory.Memory{mem}, []memory.Link{link}); err != nil {
+		t.Fatal(err)
+	}
+}
