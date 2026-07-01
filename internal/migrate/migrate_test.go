@@ -59,6 +59,35 @@ func TestApplyIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestApplyRecordsVersionWhenSchemaIsCurrentButLedgerMissing(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "store.db")
+	db, closeDB := openDB(t, path)
+	defer closeDB()
+
+	gormDB, err := openGORM(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchema(ctx, gormDB, db); err != nil {
+		t.Fatal(err)
+	}
+	if got := dbVersion(ctx, t, db); got != 0 {
+		t.Fatalf("db version before Apply = %d, want 0 (schema exists but ledger row missing)", got)
+	}
+
+	if err := Apply(ctx, db, path); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := dbVersion(ctx, t, db), schemaVersion; got != want {
+		t.Fatalf("db version = %d, want %d (ledger recorded without schema rewrite)", got, want)
+	}
+	if _, err := os.Stat(path + ".bak-v0"); !os.IsNotExist(err) {
+		t.Fatalf("unexpected backup for current schema with missing ledger: err = %v", err)
+	}
+}
+
 func TestApplyBacksUpAlreadyVersionedDatabase(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
