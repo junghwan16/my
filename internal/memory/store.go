@@ -80,7 +80,12 @@ func (s *Store) WithEmbedder(embedder Embedder) *Store {
 // ReplaceSourceMemories atomically replaces every memory produced by one agent for a
 // source. Memories linked to the source by the same agent that are absent from the
 // new set are deleted, so re-ingesting a source never accumulates old memories.
-func (s *Store) ReplaceSourceMemories(ctx context.Context, sourceID sourcespkg.SourceID, agent string, memories []Memory, links []Link) error {
+// Relations authored by this run (Memory->Memory) are replaced along with their
+// source memories: deleting a previous memory cascades to the relations that
+// started from it (from_memory_id ON DELETE CASCADE), so a re-ingest never
+// accumulates stale relations either. The new relations are inserted after the
+// new memories exist, so both endpoints satisfy their foreign keys.
+func (s *Store) ReplaceSourceMemories(ctx context.Context, sourceID sourcespkg.SourceID, agent string, memories []Memory, links []Link, relations []Relation) error {
 	// Embed OUTSIDE the write transaction. The embedder is a slow network call
 	// (a local Ollama round-trip); embedding inside the transaction held the
 	// SQLite write lock for its whole duration, so a second process touching the
@@ -94,7 +99,10 @@ func (s *Store) ReplaceSourceMemories(ctx context.Context, sourceID sourcespkg.S
 		if err := s.upsertMemories(ctx, tx, memories, vectors); err != nil {
 			return err
 		}
-		return s.upsertLinks(ctx, tx, links)
+		if err := s.upsertLinks(ctx, tx, links); err != nil {
+			return err
+		}
+		return s.upsertRelations(ctx, tx, relations)
 	})
 }
 
@@ -228,6 +236,62 @@ func (s *Store) upsertLinks(ctx context.Context, tx *sql.Tx, links []Link) error
 		}
 	}
 	return nil
+}
+
+// upsertRelations writes the Memory->Memory relations an agent authored for this
+// run. An empty From or To is skipped (a relation needs both endpoints); the
+// allowlist that produced these already dropped any To that was not shown to the
+// agent, so every survivor points at a real, in-prompt memory.
+func (s *Store) upsertRelations(ctx context.Context, tx *sql.Tx, relations []Relation) error {
+	for i := range relations {
+		relation := relations[i]
+		if relation.FromMemoryID == "" || relation.ToMemoryID == "" {
+			continue
+		}
+		if relation.Kind == "" {
+			relation.Kind = RelationKindRelates
+		}
+		if len(relation.MetadataJSON) == 0 {
+			relation.MetadataJSON = jsonutil.EmptyObject()
+		}
+		row := newRelationRow(relation)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO memory_relations (
+			from_memory_id,
+			to_memory_id,
+			kind,
+			created_at,
+			metadata_json
+		) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (from_memory_id, to_memory_id, kind) DO UPDATE SET
+			created_at = EXCLUDED.created_at,
+			metadata_json = EXCLUDED.metadata_json`,
+			row.FromMemoryID,
+			row.ToMemoryID,
+			row.Kind,
+			row.CreatedAt,
+			row.MetadataJSON,
+		); err != nil {
+			return fmt.Errorf("upsert memory relation: %w", err)
+		}
+	}
+	return nil
+}
+
+// MemoryRelations lists the relations starting from a memory (its outgoing
+// Memory->Memory links), ordered for stable output.
+func (s *Store) MemoryRelations(ctx context.Context, from MemoryID) ([]Relation, error) {
+	rows, err := queryRelationRows(ctx, s.db, relationColumnsSQL()+`
+		FROM memory_relations AS rel
+		WHERE rel.from_memory_id = ?
+		ORDER BY rel.created_at, rel.to_memory_id, rel.kind`, string(from))
+	if err != nil {
+		return nil, fmt.Errorf("load memory relations: %w", err)
+	}
+	relations := make([]Relation, 0, len(rows))
+	for _, row := range rows {
+		relations = append(relations, row.toRelation())
+	}
+	return relations, nil
 }
 
 // Stats reports recall index health: how many memories are stored, how many of
@@ -761,6 +825,15 @@ func linkColumnsSQL() string {
 		link.metadata_json`
 }
 
+func relationColumnsSQL() string {
+	return `SELECT
+		rel.from_memory_id,
+		rel.to_memory_id,
+		rel.kind,
+		rel.created_at,
+		rel.metadata_json`
+}
+
 func queryMemoryRow(ctx context.Context, db sqlQueryer, query string, args ...any) (memoryRow, error) {
 	return scanMemoryRow(db.QueryRowContext(ctx, query, args...))
 }
@@ -842,6 +915,46 @@ func scanLinkRow(scanner rowScanner) (linkRow, error) {
 	var err error
 	if row.CreatedAt, err = scanRequiredTime(createdAt); err != nil {
 		return linkRow{}, fmt.Errorf("parse created_at: %w", err)
+	}
+	return row, nil
+}
+
+func queryRelationRows(ctx context.Context, db sqlQueryer, query string, args ...any) ([]relationRow, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	relations := []relationRow{}
+	for rows.Next() {
+		row, err := scanRelationRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		relations = append(relations, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return relations, nil
+}
+
+func scanRelationRow(scanner rowScanner) (relationRow, error) {
+	var row relationRow
+	var createdAt any
+	if err := scanner.Scan(
+		&row.FromMemoryID,
+		&row.ToMemoryID,
+		&row.Kind,
+		&createdAt,
+		&row.MetadataJSON,
+	); err != nil {
+		return relationRow{}, err
+	}
+	var err error
+	if row.CreatedAt, err = scanRequiredTime(createdAt); err != nil {
+		return relationRow{}, fmt.Errorf("parse created_at: %w", err)
 	}
 	return row, nil
 }

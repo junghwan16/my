@@ -69,6 +69,34 @@ func (r linkRow) toLink() Link {
 	}
 }
 
+type relationRow struct {
+	FromMemoryID string
+	ToMemoryID   string
+	Kind         string
+	CreatedAt    time.Time
+	MetadataJSON string
+}
+
+func newRelationRow(relation Relation) *relationRow {
+	return &relationRow{
+		FromMemoryID: string(relation.FromMemoryID),
+		ToMemoryID:   string(relation.ToMemoryID),
+		Kind:         string(relation.Kind),
+		CreatedAt:    relation.CreatedAt,
+		MetadataJSON: string(relation.MetadataJSON),
+	}
+}
+
+func (r relationRow) toRelation() Relation {
+	return Relation{
+		FromMemoryID: MemoryID(r.FromMemoryID),
+		ToMemoryID:   MemoryID(r.ToMemoryID),
+		Kind:         RelationKind(r.Kind),
+		CreatedAt:    r.CreatedAt,
+		MetadataJSON: []byte(r.MetadataJSON),
+	}
+}
+
 // sourceRefRow is the flat projection of a memory's linked source used to build
 // recall results: the memory ID it belongs to plus that source's identity and
 // scope. It is scanned from a memory_links-to-sources join, not a single table.

@@ -115,7 +115,7 @@ func TestSearchReflectsReplacedMemory(t *testing.T) {
 	now := time.Date(2026, 7, 1, 13, 0, 0, 0, time.UTC)
 	newMem := memoriespkg.Memory{ID: "memory:v2", Agent: "t", Kind: memoriespkg.MemoryKindSummary, Text: "날씨 정보", CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
 	newLink := memoriespkg.Link{SourceID: src.ID, MemoryID: newMem.ID, Kind: memoriespkg.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
-	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{newMem}, []memoriespkg.Link{newLink}); err != nil {
+	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{newMem}, []memoriespkg.Link{newLink}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -205,7 +205,7 @@ func recordMemory(ctx context.Context, t *testing.T, sources *sourcespkg.Store, 
 	now := time.Date(2026, 7, 1, 12, 30, 0, 0, time.UTC)
 	mem := memoriespkg.Memory{ID: memoriespkg.MemoryID(memID), Agent: "t", Kind: memoriespkg.MemoryKindSummary, Text: text, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
 	link := memoriespkg.Link{SourceID: src.ID, MemoryID: mem.ID, Kind: memoriespkg.LinkKindSourceIngest, CreatedAt: now, MetadataJSON: json.RawMessage(`{}`)}
-	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{mem}, []memoriespkg.Link{link}); err != nil {
+	if err := memories.ReplaceSourceMemories(ctx, src.ID, "t", []memoriespkg.Memory{mem}, []memoriespkg.Link{link}, nil); err != nil {
 		t.Fatal(err)
 	}
 }

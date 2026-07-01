@@ -26,6 +26,9 @@ func TestApplyCreatesSchemaAndRecordsVersion(t *testing.T) {
 	if !hasTable(ctx, t, db, "memory_links") {
 		t.Fatal("memory_links table missing after Apply")
 	}
+	if !hasTable(ctx, t, db, "memory_relations") {
+		t.Fatal("memory_relations table missing after Apply")
+	}
 	if !hasColumn(ctx, t, db, "sources", "imported_at") {
 		t.Fatal("sources.imported_at column missing after Apply")
 	}
