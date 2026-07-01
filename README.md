@@ -20,15 +20,21 @@
   - stdio 위에서 도는 MCP 서버를 실행합니다. Claude Code 같은 MCP 클라이언트가 붙어 메모리를 Recall 할 수 있습니다.
   - `recall` 툴: `query`(필수), `scope`(선택), `limit`(선택)을 받아 CLI recall과 동일한 seam(`memory.Recaller.Recollect`, 어휘+의미 RRF 하이브리드)을 통과시켜 랭킹된 Memory를 구조화 결과로 반환합니다.
   - 각 결과는 `memory_id`, `agent`, `kind`, `text`, `created`와, Memory가 파생된 여러 Source를 담는 `sources` 배열(각 항목 `id` / `uri` / `scope{kind,value}`)을 담습니다. CLI recall의 `--json` 모델과 동일한 shape입니다.
-- **`my hook [--store <db>]`**
-  - Claude Code hook 페이로드를 stdin(JSON)으로 받아 `transcript_path` 세션을 자동으로 import 합니다. 끝난 세션이 곧 recall 가능한 Source가 됩니다.
-  - fail-soft: 페이로드·세션에 문제가 있어도 세션을 깨뜨리지 않도록 stderr에 알리고 종료 코드 0으로 끝납니다. LLM 단계인 ingest는 hook에서 하지 않고 `my memory ingest` 배치에 맡겨 hook을 빠르게 유지합니다.
-  - `~/.claude/settings.json`의 Stop hook으로 연결합니다:
-    ```json
-    { "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "my hook" } ] } ] } }
-    ```
-
 기본 저장 위치: `~/.local/share/my/memory/my.db`
+
+## 세션 자동 캡처
+
+Claude Code / Codex 세션은 이미 `~/.claude/projects/*.jsonl` 등에 쌓입니다. 이를
+주기적으로 훑어 기록합니다(cron / launchd):
+
+```sh
+my memory import --from ~/.claude/projects && my memory ingest
+```
+
+배치 방식이라 per-turn 오버헤드가 없고 세션당 중복 Source도 생기지 않습니다.
+(과거의 `my hook` per-turn Stop 훅은 트랜스크립트가 커질 때마다 부분 스냅샷
+Source를 중복 생성해 제거했습니다 — 세션은 이미 디스크에 있으므로 배치 스윕으로
+충분합니다.)
 
 ## 로드맵 (미구현)
 

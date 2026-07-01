@@ -40,15 +40,13 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		return runMemory(ctx, args, stdout, stderr, now)
 	case "mcp":
 		return runMCP(ctx, args, stderr)
-	case "hook":
-		return runHook(ctx, args, os.Stdin, stdout, stderr, now)
 	default:
 		return errUsage
 	}
 }
 
 // errUsage is the top-level usage error.
-var errUsage = errors.New("usage: my <memory|mcp|hook>")
+var errUsage = errors.New("usage: my <memory|mcp>")
 
 func runMemory(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, now time.Time) error {
 	if len(args) < 2 {
