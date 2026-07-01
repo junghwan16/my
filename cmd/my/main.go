@@ -14,6 +14,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/junghwan16/my/internal/embed"
 	"github.com/junghwan16/my/internal/mcp"
 	"github.com/junghwan16/my/internal/memory"
 	"github.com/junghwan16/my/internal/migrate"
@@ -87,10 +88,25 @@ func withStores(ctx context.Context, path string, fn func(*source.Store, *memory
 		return fmt.Errorf("build korean tokenizer: %w", err)
 	}
 	memories := memory.NewStore(db, tokenizer)
+	attachEmbedder(ctx, memories)
 	if err = memories.EnsureFTSIndexed(ctx); err != nil {
 		return err
 	}
+	if err = memories.EnsureVectorsIndexed(ctx); err != nil {
+		return err
+	}
 	return fn(source.NewStore(db), memories)
+}
+
+// attachEmbedder enables semantic recall when a local Ollama sidecar is
+// reachable. It health-checks the default bge-m3 embedder and attaches it only
+// if available; otherwise the store keeps a nil embedder and recall stays
+// lexical-only, so the default build works fully offline with no Ollama.
+func attachEmbedder(ctx context.Context, memories *memory.Store) {
+	embedder := embed.NewOllama()
+	if embedder.Available(ctx) {
+		memories.WithEmbedder(embedder)
+	}
 }
 
 func runMemoryImport(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, now time.Time) error {

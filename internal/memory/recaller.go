@@ -12,6 +12,7 @@ type MemoryReader interface {
 	SourceMemories(context.Context, source.SourceID) ([]Memory, error)
 	SourceLinks(context.Context, source.SourceID) ([]Link, error)
 	SearchMemories(ctx context.Context, query, scope string, limit int) ([]Memory, error)
+	SearchSemantic(ctx context.Context, query, scope string, limit int) ([]Memory, error)
 	SearchRecollections(ctx context.Context, query, scope string, limit int) ([]Recollection, error)
 	RecentRecollections(ctx context.Context, scope string, limit int) ([]Recollection, error)
 }
@@ -37,6 +38,16 @@ func (r *Recaller) Recall(ctx context.Context, id source.SourceID) ([]Memory, er
 // restricted to a scope. An empty scope searches every scope.
 func (r *Recaller) Search(ctx context.Context, query, scope string, limit int) ([]Memory, error) {
 	return r.store.SearchMemories(ctx, query, scope, limit)
+}
+
+// SearchSemantic returns memories relevant to query ranked by embedding cosine
+// similarity (best-first), optionally restricted to a scope. It is the semantic
+// counterpart to Search and the engine a later hybrid recall (#6) fuses with
+// the lexical ranking. When the store has no embedder configured it returns no
+// results and no error, so callers can fall back to lexical Search. An empty
+// scope searches every scope.
+func (r *Recaller) SearchSemantic(ctx context.Context, query, scope string, limit int) ([]Memory, error) {
+	return r.store.SearchSemantic(ctx, query, scope, limit)
 }
 
 // Links returns the source-to-memory links for a source.

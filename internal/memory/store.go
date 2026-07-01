@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/uptrace/bun"
@@ -23,6 +24,7 @@ const defaultSearchLimit = 20
 type Store struct {
 	db        *bun.DB
 	tokenizer Tokenizer
+	embedder  Embedder
 }
 
 var (
@@ -33,8 +35,20 @@ var (
 // NewStore returns a memory store backed by an already-open database. The
 // tokenizer indexes and queries memory text; it must be the same one on both
 // paths so a term indexed one way is not missed by a query split differently.
+// The store starts with no embedder, so semantic recall is disabled until one
+// is attached with WithEmbedder.
 func NewStore(db *bun.DB, tokenizer Tokenizer) *Store {
 	return &Store{db: db, tokenizer: tokenizer}
+}
+
+// WithEmbedder attaches an optional embedder that enables semantic recall: when
+// present, memory text is embedded on write and SearchSemantic can rank by
+// cosine similarity. Passing nil (the default) keeps semantic features off and
+// leaves lexical recall untouched, so an unreachable Ollama degrades gracefully
+// rather than failing. It returns the store for fluent wiring.
+func (s *Store) WithEmbedder(embedder Embedder) *Store {
+	s.embedder = embedder
+	return s
 }
 
 // ReplaceSourceMemories atomically replaces every memory produced by one agent for a
@@ -102,6 +116,9 @@ func (s *Store) upsertMemories(ctx context.Context, tx bun.Tx, memories []Memory
 			return fmt.Errorf("upsert memory: %w", err)
 		}
 		if err := s.indexFTS(ctx, tx, mem); err != nil {
+			return err
+		}
+		if err := s.indexVector(ctx, tx, mem); err != nil {
 			return err
 		}
 	}
@@ -219,6 +236,102 @@ func (s *Store) SearchMemories(ctx context.Context, query, scope string, limit i
 		memories = append(memories, row.toMemory())
 	}
 	return memories, nil
+}
+
+// candidateVector is a scoped memory row paired with its stored embedding,
+// loaded together so semantic ranking needs a single query per search.
+type candidateVector struct {
+	memoryRow `bun:",extend"`
+
+	VectorBlob []byte `bun:"vector_blob"`
+}
+
+// SearchSemantic ranks memories by cosine similarity between the query
+// embedding and each stored memory embedding, returning the top-limit closest.
+// It embeds the query with the store's embedder, loads candidate vectors within
+// scope (matching the embedder's model, so a model change cannot mix
+// incomparable vectors), and ranks by brute-force cosine in Go — enough for the
+// tens-of-thousands scale this store targets. It returns nil (no error) when no
+// embedder is attached or the query embeds empty, so callers fall back to
+// lexical recall gracefully. Scope and limit follow SearchMemories.
+func (s *Store) SearchSemantic(ctx context.Context, query, scope string, limit int) ([]Memory, error) {
+	if s.embedder == nil {
+		return nil, nil
+	}
+	queryVec, err := s.embedder.Embed(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+	if len(queryVec) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+
+	candidates, err := s.loadCandidateVectors(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	return rankBySimilarity(queryVec, candidates, limit), nil
+}
+
+// loadCandidateVectors loads every in-scope memory that has a vector for the
+// embedder's current model, each with its raw embedding blob. Scope filtering
+// mirrors SearchMemories (memory_links → sources.scope_value).
+func (s *Store) loadCandidateVectors(ctx context.Context, scope string) ([]candidateVector, error) {
+	query := s.db.NewSelect().
+		Model((*candidateVector)(nil)).
+		ColumnExpr("memory.*").
+		ColumnExpr("vec.vector AS vector_blob").
+		Join("JOIN memory_vectors AS vec ON vec.memory_id = memory.id").
+		Where("vec.model = ?", s.embedder.Model())
+	if scope != "" {
+		query = query.Where(
+			"EXISTS (SELECT 1 FROM memory_links AS l JOIN sources AS sr ON sr.id = l.source_id"+
+				" WHERE l.memory_id = memory.id AND sr.scope_value = ?)", scope)
+	}
+
+	var candidates []candidateVector
+	if err := query.Scan(ctx, &candidates); err != nil {
+		return nil, fmt.Errorf("load candidate vectors: %w", err)
+	}
+	return candidates, nil
+}
+
+// rankBySimilarity scores every candidate against the query vector by cosine
+// similarity, sorts best-first (ties broken by newest then id for stable
+// output), and returns at most limit memories. Candidates whose stored vector
+// does not match the query's dimension score 0 and sink to the bottom.
+func rankBySimilarity(queryVec []float32, candidates []candidateVector, limit int) []Memory {
+	type scored struct {
+		mem   Memory
+		score float64
+	}
+	ranked := make([]scored, 0, len(candidates))
+	for _, cand := range candidates {
+		ranked = append(ranked, scored{
+			mem:   cand.toMemory(),
+			score: cosineSimilarity(queryVec, decodeVector(cand.VectorBlob)),
+		})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		if !ranked[i].mem.CreatedAt.Equal(ranked[j].mem.CreatedAt) {
+			return ranked[i].mem.CreatedAt.After(ranked[j].mem.CreatedAt)
+		}
+		return ranked[i].mem.ID < ranked[j].mem.ID
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	memories := make([]Memory, 0, len(ranked))
+	for _, r := range ranked {
+		memories = append(memories, r.mem)
+	}
+	return memories
 }
 
 // SearchRecollections returns memories matching query, ranked by FTS5 BM25 and
@@ -353,6 +466,91 @@ func (s *Store) indexFTS(ctx context.Context, tx bun.Tx, mem Memory) error {
 		"INSERT INTO memories_fts (memory_id, tokens) VALUES (?, ?)", string(mem.ID), tokens,
 	); err != nil {
 		return fmt.Errorf("index memory for search: %w", err)
+	}
+	return nil
+}
+
+// indexVector replaces the embedding for one memory inside an open transaction.
+// It is a no-op when no embedder is attached, so the default (offline) build
+// never touches the vector table. When the embedder is present but the embed
+// call fails (e.g. Ollama went away mid-write), the stale vector is cleared and
+// the memory is left without one rather than failing the whole write; the
+// backfill re-embeds it on a later run once the embedder is healthy again.
+func (s *Store) indexVector(ctx context.Context, tx bun.Tx, mem Memory) error {
+	if s.embedder == nil {
+		return nil
+	}
+	if _, err := tx.NewDelete().
+		Model((*vectorRow)(nil)).
+		Where("memory_id = ?", string(mem.ID)).
+		Exec(ctx); err != nil {
+		return fmt.Errorf("clear memory vector: %w", err)
+	}
+	vec, ok := embedTolerant(ctx, s.embedder, mem.Text)
+	if !ok {
+		return nil
+	}
+	if _, err := tx.NewInsert().
+		Model(newVectorRow(string(mem.ID), s.embedder.Model(), vec)).
+		Exec(ctx); err != nil {
+		return fmt.Errorf("store memory vector: %w", err)
+	}
+	return nil
+}
+
+// embedTolerant embeds text and reports whether a usable vector came back. An
+// embed error or empty vector yields ok=false, so callers skip the vector
+// (keeping semantic recall optional) instead of failing the surrounding write.
+// The error is deliberately swallowed here: fallback is the contract.
+func embedTolerant(ctx context.Context, embedder Embedder, text string) (vec []float32, ok bool) {
+	vec, err := embedder.Embed(ctx, text)
+	if err != nil || len(vec) == 0 {
+		return nil, false
+	}
+	return vec, true
+}
+
+// EnsureVectorsIndexed backfills embeddings for memories that lack a current
+// vector (never embedded, or embedded by a different model). It is idempotent
+// and a no-op when no embedder is attached, mirroring EnsureFTSIndexed. Embed
+// failures for individual memories are skipped, so a transient Ollama outage
+// leaves the rest indexed and lexical recall unaffected.
+func (s *Store) EnsureVectorsIndexed(ctx context.Context) error {
+	if s.embedder == nil {
+		return nil
+	}
+	model := s.embedder.Model()
+	var rows []memoryRow
+	if err := s.db.NewSelect().
+		Model(&rows).
+		Where("id NOT IN (SELECT memory_id FROM memory_vectors WHERE model = ?)", model).
+		Scan(ctx); err != nil {
+		return fmt.Errorf("load memories for vector backfill: %w", err)
+	}
+	for _, row := range rows {
+		if err := s.backfillVector(ctx, row.toMemory(), model); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// backfillVector embeds one memory and upserts its vector in its own
+// transaction. An embed failure is skipped (returns nil) so one unreachable
+// call does not abort the whole backfill.
+func (s *Store) backfillVector(ctx context.Context, mem Memory, model string) error {
+	vec, ok := embedTolerant(ctx, s.embedder, mem.Text)
+	if !ok {
+		return nil
+	}
+	if _, err := s.db.NewInsert().
+		Model(newVectorRow(string(mem.ID), model, vec)).
+		On("CONFLICT (memory_id) DO UPDATE").
+		Set("model = EXCLUDED.model").
+		Set("dim = EXCLUDED.dim").
+		Set("vector = EXCLUDED.vector").
+		Exec(ctx); err != nil {
+		return fmt.Errorf("backfill memory vector: %w", err)
 	}
 	return nil
 }
