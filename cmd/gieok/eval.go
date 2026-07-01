@@ -144,7 +144,11 @@ func parseMemoryEvalConfig(args []string, stderr io.Writer) (memoryEvalConfig, e
 	scenariosPath := flags.String("scenarios", defaultScenariosPath, "Replay scenarios JSON file")
 	mode := flags.String("mode", "hybrid", "Ranker to score: hybrid, lexical, semantic, or all")
 	limit := flags.Int("limit", 5, "Top-k results considered per scenario")
-	minSim := flags.Float64("min-sim", 0.6, "Cosine floor for an embedding hit")
+	// 0.45 is calibrated for bge-m3, whose cosine is compressed: measured real
+	// hits score ~0.55 while a 0.60 floor missed every true hit (see
+	// runs/2026-07-02-partial-baseline-ablation.yaml). It mirrors the store's own
+	// 0.40 recall floor rather than a textbook 0.6.
+	minSim := flags.Float64("min-sim", 0.45, "Cosine floor for an embedding hit (bge-m3 compressed; ~0.45)")
 	passRate := flags.Float64("pass", 0.7, "Hit-rate fraction required to pass")
 	asJSON := flags.Bool("json", false, "Emit the report(s) as JSON")
 	if err := flags.Parse(args[2:]); err != nil {
