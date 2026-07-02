@@ -1,26 +1,96 @@
 {
-  "_note": "Machine-readable replay scenarios for `gieok memory eval`. Scope is the canonical /Users/jeff.cho/personal/gieok path. The gieok-dev Memory was captured under the legacy /personal/my path and its worktrees, but WorkspaceKey scoped recall (ADR-0009) unifies them, so recalling from the canonical path returns it. expected_knowledge is embedded and compared to each top result by cosine; anchors are distinctive substrings that count as a lexical hit. Three scenarios is statistically underpowered — treat results as directional until the set grows to 10-15.",
+  "_note": "Machine-readable replay scenarios for `gieok memory eval`. Scope is the canonical /Users/jeff.cho/personal/gieok path; WorkspaceKey scoped recall (ADR-0009) unifies it with the legacy /personal/my path and worktrees where the gieok-dev Memory was captured. expected_knowledge is embedded and compared to each top result by cosine; anchors are distinctive substrings (model names, arxiv ids, api names) that count as a lexical hit and reduce the judge's semantic bias. Scenarios are grounded in memory verified present in the store, not invented. N=9; grow further and add a held-out split before over-tuning.",
   "scenarios": [
     {
-      "id": "useful-recall-001-session-capture",
+      "id": "ur-001-session-capture",
       "task": "세션 자동 캡처 방식을 다시 손보고 싶다. hook으로 바로 기록하는 게 나을까?",
       "scope": "/Users/jeff.cho/personal/gieok",
       "expected_knowledge": "과거 per-turn Stop hook은 대화 기록의 커지는 부분 스냅샷을 Source로 중복 생성해서 제거했다. 현재 방향은 세션 파일을 Source로 import하고 예약 ingest로 Memory를 만드는 방식이다.",
-      "anchors": ["per-turn", "scheduled", "import"]
+      "anchors": [
+        "per-turn",
+        "scheduled",
+        "hook"
+      ]
     },
     {
-      "id": "useful-recall-002-semantic-floor",
+      "id": "ur-002-semantic-floor",
       "task": "recall이 paraphrase 질의를 잘 못 찾는 것 같다. semantic similarity cutoff를 더 엄격하게 올려도 될까?",
       "scope": "/Users/jeff.cho/personal/gieok",
-      "expected_knowledge": "semantic similarity floor 0.50은 paraphrase를 죽여서 0.40으로 낮췄다. gieok recall은 false negative를 줄이는 recall-first 쪽을 우선한다.",
-      "anchors": ["0.40", "0.50", "paraphrase", "recall-first"]
+      "expected_knowledge": "semantic similarity floor 0.50은 paraphrase를 죽여서 0.40으로 낮췄다. recall은 false negative를 줄이는 recall-first 쪽을 우선한다.",
+      "anchors": [
+        "0.40",
+        "paraphrase",
+        "recall-first"
+      ]
     },
     {
-      "id": "useful-recall-003-gieok-rename",
-      "task": "README와 CLI help를 정리하면서 아직 my라는 이름이 남아 있는지 봐줘.",
+      "id": "ur-003-korean-embedding-model",
+      "task": "한국어 recall에 쓸 임베딩 모델 뭐가 좋아? 오프라인 로컬로 돌릴 수 있는 걸로.",
       "scope": "/Users/jeff.cho/personal/gieok",
-      "expected_knowledge": "프로젝트와 명령어는 my에서 gieok으로 rename됐다. 문서, Go module path, CLI usage, default agent shortcut 동작이 함께 맞아야 한다.",
-      "anchors": ["rename", "go.mod", "module path"]
+      "expected_knowledge": "한국어 semantic recall 후보 임베딩 모델로 BGE-M3, KURE-v1, Qwen3-Embedding이 오프라인 로컬 후보로 검토됐다. 벤치마크 주장은 1차 출처로 검증해야 한다.",
+      "anchors": [
+        "BGE-M3",
+        "KURE",
+        "Qwen3"
+      ]
+    },
+    {
+      "id": "ur-004-korean-tokenizer",
+      "task": "한국어 형태소 토크나이저를 Go에서 붙이려면 뭘 써야 하나?",
+      "scope": "/Users/jeff.cho/personal/gieok",
+      "expected_knowledge": "한국어 lexical 분석을 위한 Go 토크나이저로 nori-clone, Kiwi, Kagome가 검증됐다. Nori가 Elasticsearch 공식 한국어 분석기라는 주장 등은 adversarial하게 검증됐다.",
+      "anchors": [
+        "nori-clone",
+        "Kiwi",
+        "Kagome"
+      ]
+    },
+    {
+      "id": "ur-005-sqlite-vec",
+      "task": "벡터를 SQLite 안에 저장하려는데 sqlite-vec 저장 구조가 어떻게 돼?",
+      "scope": "/Users/jeff.cho/personal/gieok",
+      "expected_knowledge": "sqlite-vec의 vec0 virtual table은 벡터를 SQLite 네이티브로 같은 DB에 저장한다.",
+      "anchors": [
+        "sqlite-vec",
+        "vec0"
+      ]
+    },
+    {
+      "id": "ur-006-fts5-tokenizer",
+      "task": "SQLite FTS5에 커스텀 토크나이저를 붙일 수 있어?",
+      "scope": "/Users/jeff.cho/personal/gieok",
+      "expected_knowledge": "SQLite FTS5는 custom tokenizer 경로를 지원한다(sqlite.org/fts5.html 1차 출처로 검증).",
+      "anchors": [
+        "FTS5"
+      ]
+    },
+    {
+      "id": "ur-007-miracl-benchmark",
+      "task": "MIRACL 한국어 벤치마크로 dense retrieval이 항상 낫다고 결론 내도 돼?",
+      "scope": "/Users/jeff.cho/personal/gieok",
+      "expected_knowledge": "MIRACL 한국어 증거는 dense retrieval이 항상 훨씬 강하다는 넓은 주장을 뒷받침하지 않는다. 지지 증거로만 취급해야 한다.",
+      "anchors": [
+        "MIRACL"
+      ]
+    },
+    {
+      "id": "ur-008-research-methodology",
+      "task": "이 프로젝트에서 리서치 주장은 어떻게 검증하기로 했지?",
+      "scope": "/Users/jeff.cho/personal/gieok",
+      "expected_knowledge": "recall 리서치는 adversarial multi-agent 검증 워크플로로 진행한다: 개별 주장을 여러 검증자가 반박 시도하며 1차 출처로 확인한다.",
+      "anchors": [
+        "adversarial"
+      ]
+    },
+    {
+      "id": "ur-009-hybrid-rrf",
+      "task": "어휘 검색이랑 의미 검색을 어떻게 합치기로 했어?",
+      "scope": "/Users/jeff.cho/personal/gieok",
+      "expected_knowledge": "어휘(FTS5/BM25) 랭킹과 의미(임베딩 코사인) 랭킹을 Reciprocal Rank Fusion(RRF)으로 융합한다.",
+      "anchors": [
+        "RRF",
+        "Reciprocal"
+      ]
     }
   ]
 }

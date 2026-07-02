@@ -1,0 +1,25 @@
+run:
+  id: 2026-07-02-expanded-n9-ablation
+  store: "frozen snapshot snap3 (3142 memories; re-ingest ongoing on live DB)"
+  scenarios: "docs/evaluation/useful-recall/scenarios.json (N=9, grounded in verified-present memory)"
+  method: "scenarios expanded from N=3 to N=9 using knowledge confirmed present in the store (anchor counts verified: BGE-M3 42, MIRACL 30, FTS5 24, Kagome 19, KURE 17, Kiwi 16, Qwen3 14, sqlite-vec 10, RRF 9, nori-clone 5)."
+
+product_path_hybrid_canonical_scope:
+  hit_rate: "9/9 (100%)"
+  mrr: 0.944
+  note: "Recall from canonical /personal/gieok works via WorkspaceKey; ur-001 (per-turn) hits @1 by semantic (0.524) even though the literal 'per-turn' anchor no longer appears after re-ingest — knowledge survived rewording."
+
+ranker_ablation_fair_my_scope:
+  hybrid:   { hit_rate: "9/9 (100%)", mrr: 0.944, verdict: PASS }
+  semantic: { hit_rate: "9/9 (100%)", mrr: 0.889, verdict: PASS }
+  lexical:  { hit_rate: "0/9 (0%)",   mrr: 0.000, verdict: FAIL }
+
+findings:
+  - "Well-powered now (N=9): lexical (FTS5/BM25 + Korean morpheme) contributes ZERO on paraphrased Korean NL queries — task words differ from memory words. Semantic carries recall."
+  - "Hybrid >= semantic: fusion lifts MRR 0.889 -> 0.944 (ranks one hit higher). Validates the RRF design."
+  - "hit@5 target (70%) exceeded at 100% on the grounded N=9 set."
+
+open_directions:
+  - "Add exact-term scenarios where lexical SHOULD win, to demonstrate hybrid > semantic (current set is all paraphrase, so lexical's contribution is untested)."
+  - "Judge still uses embedding cosine (semantic-biased); anchors mitigate but an independent labeled-id judge would be stronger."
+  - "Add a held-out scenario split before tuning ranking params (min-sim, RRF k)."
