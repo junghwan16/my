@@ -110,7 +110,10 @@ export function SearchApp() {
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="h-screen bg-[#08080b]">
+      {/* Contained app: capped width + centered so it never stretches thin on a
+          wide monitor; the darker gutters read as an intentional app frame. */}
+      <div className="mx-auto flex h-full max-w-[1180px] flex-col border-x border-border bg-background">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
         <div className="flex items-baseline gap-2">
           <span className="text-sm font-semibold tracking-tight">gieok</span>
@@ -177,6 +180,7 @@ export function SearchApp() {
             onUpdated={onMemoryUpdated}
           />
         </div>
+      </div>
       </div>
 
       <CommandMenu

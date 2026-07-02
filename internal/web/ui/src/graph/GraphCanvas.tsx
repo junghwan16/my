@@ -190,11 +190,11 @@ function createEngine(
     // distanceMax keeps repulsion local, so separate clusters don't shove each
     // other across the canvas; forceX/Y gently gather disconnected clusters
     // toward the center instead of letting them drift apart.
-    .force('charge', forceManyBody<FNode>().strength(-95).distanceMax(260))
-    .force('link', forceLink<FNode, FLink>([]).id((d) => d.id).distance(44).strength(0.6))
-    .force('x', forceX(0).strength(0.03))
-    .force('y', forceY(0).strength(0.04))
-    .force('collide', forceCollide<FNode>((d) => radius(d) + 5))
+    .force('charge', forceManyBody<FNode>().strength(-125).distanceMax(330))
+    .force('link', forceLink<FNode, FLink>([]).id((d) => d.id).distance(50).strength(0.55))
+    .force('x', forceX(0).strength(0.02))
+    .force('y', forceY(0).strength(0.028))
+    .force('collide', forceCollide<FNode>((d) => radius(d) + 6))
     .alphaDecay(0.02)
     .velocityDecay(0.35)
     .on('tick', draw)
