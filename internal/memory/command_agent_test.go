@@ -44,6 +44,24 @@ func TestParseAgentMemoriesJSONArrayProducesMultiple(t *testing.T) {
 	}
 }
 
+func TestParseAgentMemoriesEmptyArrayProducesNoMemories(t *testing.T) {
+	// The ingest prompt tells agents to output [] when nothing is worth keeping.
+	// A valid empty JSON array must yield zero memories, not a "[]" summary.
+	for _, in := range []string{"[]", "  [] \n", "[ ]"} {
+		if got := parseAgentMemories(in); len(got) != 0 {
+			t.Fatalf("parseAgentMemories(%q) = %#v, want zero memories", in, got)
+		}
+	}
+}
+
+func TestParseAgentMemoriesAllBlankItemsProducesNoMemories(t *testing.T) {
+	// A JSON array whose items are all blank is still structured output → zero
+	// memories, not a raw-text fallback.
+	if got := parseAgentMemories(`[{"text":"   "},{"text":""}]`); len(got) != 0 {
+		t.Fatalf("parseAgentMemories = %#v, want zero memories", got)
+	}
+}
+
 func TestParseAgentMemoriesMalformedJSONFallsBackToSummary(t *testing.T) {
 	text := `[not valid json`
 	memories := parseAgentMemories(text)

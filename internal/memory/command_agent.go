@@ -112,17 +112,29 @@ func (r execRunner) Run(ctx context.Context, prompt string) ([]byte, error) {
 	return stdout, nil
 }
 
-// parseAgentMemories interprets command stdout. A JSON array of memories lets agents
-// emit multiple typed, metadata-tagged memories; any other output is stored as a
-// single summary.
+// parseAgentMemories interprets command stdout. A JSON array of memories lets
+// agents emit multiple typed, metadata-tagged memories — including an empty array
+// when the source holds nothing worth keeping (which the ingest prompt asks for),
+// yielding zero memories. Only output that is NOT a JSON array falls back to a
+// single summary of the raw text.
 func parseAgentMemories(text string) []AgentMemory {
-	if memories, ok := decodeAgentMemories(text); ok {
+	if memories, isJSONArray := decodeAgentMemories(text); isJSONArray {
 		return memories
 	}
-	return []AgentMemory{{Kind: MemoryKindSummary, Text: text}}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	return []AgentMemory{{Kind: MemoryKindSummary, Text: trimmed}}
 }
 
-func decodeAgentMemories(text string) ([]AgentMemory, bool) {
+// decodeAgentMemories reports whether text is a JSON array of memories and, if so,
+// the non-empty ones it contains. isJSONArray is true whenever the text parses as
+// a JSON array — even an empty one — so a valid "[]" ("nothing worth keeping")
+// yields zero memories rather than being misread as prose and stored verbatim as
+// a "[]" memory. It is false only when the text is not a JSON array (no leading
+// "[" or a parse error), so genuine prose still falls back to a single summary.
+func decodeAgentMemories(text string) (memories []AgentMemory, isJSONArray bool) {
 	trimmed := strings.TrimSpace(text)
 	if !strings.HasPrefix(trimmed, "[") {
 		return nil, false
@@ -131,7 +143,7 @@ func decodeAgentMemories(text string) ([]AgentMemory, bool) {
 	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
 		return nil, false
 	}
-	memories := make([]AgentMemory, 0, len(raw))
+	out := make([]AgentMemory, 0, len(raw))
 	for _, memory := range raw {
 		if strings.TrimSpace(memory.Text) == "" {
 			continue
@@ -139,12 +151,9 @@ func decodeAgentMemories(text string) ([]AgentMemory, bool) {
 		if memory.Kind == "" {
 			memory.Kind = MemoryKindSummary
 		}
-		memories = append(memories, memory)
+		out = append(out, memory)
 	}
-	if len(memories) == 0 {
-		return nil, false
-	}
-	return memories, true
+	return out, true
 }
 
 // ingestInstructions is the fixed leading section of every ingest prompt. It

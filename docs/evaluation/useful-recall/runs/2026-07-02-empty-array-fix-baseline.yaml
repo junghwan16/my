@@ -1,0 +1,35 @@
+run:
+  id: 2026-07-02-empty-array-fix-baseline
+  git_head_base: "eval/recall-harness + []-parse fix + junk cleanup"
+  store: "snapshot of ~/.local/share/gieok (566 memories after cleanup; /my scope 22 covered sources)"
+  scenarios: "docs/evaluation/useful-recall/scenarios.json (N=3, /my scope)"
+  command: "gieok memory eval --mode all --limit 5 --min-sim 0.45"
+
+finding_root_cause:
+  bug: "parseAgentMemories treated a valid empty JSON array '[]' as non-JSON and stored the literal text '[]' as a summary memory."
+  trigger: "The improved #24 ingest prompt tells agents to output [] when nothing is worth keeping — so the fix made the store WORSE until this parse bug was fixed."
+  impact_measured: "546 of 1112 memories (49%) were literal '[]' junk. Removed; parser fixed so [] yields zero memories."
+
+results_after_fix:
+  hybrid:   { hit_rate: "3/3 (100%)", mrr: 0.833, verdict: PASS }
+  lexical:  { hit_rate: "0/3 (0%)",   mrr: 0.000, verdict: FAIL }
+  semantic: { hit_rate: "3/3 (100%)", mrr: 0.833, verdict: PASS }
+  per_scenario_hybrid:
+    - { id: useful-recall-001-session-capture, outcome: "HIT@2", best_sim: 0.452 }
+    - { id: useful-recall-002-semantic-floor,  outcome: "HIT@1", best_sim: 0.554 }
+    - { id: useful-recall-003-gieok-rename,     outcome: "HIT@1", best_sim: 0.584 }
+
+progression:
+  - "original junk corpus: 0/3 (all empty or prompt-echo)"
+  - "after re-ingest with #24 prompt + []-fix + cleanup: 3/3 (100%), passes the 70% bar"
+
+scope_continuity_gap_measured:
+  query: "same task, different scope"
+  my_scope: "3 results (data lives here)"
+  canonical_gieok_scope: "0 results (user's actual path)"
+  conclusion: "Recall passes only because scenarios use the /my scope. A user in the canonical /personal/gieok path recalls nothing. Motivates the WorkspaceKey overhaul (ADR-0009)."
+
+caveats:
+  - "N=3 underpowered; judge cosine biases toward semantic/hybrid (anchors mitigate)."
+  - "lexical 0/3: Korean paraphrase queries don't lexically match; semantic carries recall."
+  - "full re-ingest of 4675 remaining sources still running."
