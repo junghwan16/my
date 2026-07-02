@@ -1,5 +1,5 @@
 {
-  "_note": "Machine-readable replay scenarios for `gieok memory eval`. Scope is the legacy /Users/jeff.cho/personal/gieok path where the gieok-dev Source and Memory currently live (canonical /personal/gieok has none yet; scope continuity is issue #21). expected_knowledge is embedded and compared to each top result by cosine; anchors are distinctive substrings that count as a lexical hit. Three scenarios is statistically underpowered — treat results as directional until the set grows to 10-15.",
+  "_note": "Machine-readable replay scenarios for `gieok memory eval`. Scope is the canonical /Users/jeff.cho/personal/gieok path. The gieok-dev Memory was captured under the legacy /personal/my path and its worktrees, but WorkspaceKey scoped recall (ADR-0009) unifies them, so recalling from the canonical path returns it. expected_knowledge is embedded and compared to each top result by cosine; anchors are distinctive substrings that count as a lexical hit. Three scenarios is statistically underpowered — treat results as directional until the set grows to 10-15.",
   "scenarios": [
     {
       "id": "useful-recall-001-session-capture",
