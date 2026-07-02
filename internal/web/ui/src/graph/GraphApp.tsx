@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import type { ElementDefinition } from 'cytoscape'
 import { ArrowLeft } from 'lucide-react'
 import {
   loadGraph,
@@ -10,7 +9,7 @@ import {
 } from '../api'
 import { ScopeSelect } from '../ScopeSelect'
 import { shortId, scopeLabel } from '../format'
-import { GraphCanvas, toElements } from './GraphCanvas'
+import { GraphCanvas, toGraphData, type GraphData } from './GraphCanvas'
 
 interface Selection {
   id: string
@@ -20,23 +19,25 @@ interface Selection {
   scope: string
 }
 
-function mergeElements(
-  prev: ElementDefinition[],
-  next: ElementDefinition[],
-): ElementDefinition[] {
-  const seen = new Set(prev.map((el) => el.data.id as string))
-  const added = next.filter((el) => !seen.has(el.data.id as string))
-  return added.length > 0 ? [...prev, ...added] : prev
+// mergeGraphData appends a neighborhood without discarding what's on screen,
+// preserving existing node/link object references so the live simulation keeps
+// its state (react-force-graph mutates those objects in place).
+function mergeGraphData(prev: GraphData, next: GraphData): GraphData {
+  const haveNodes = new Set(prev.nodes.map((n) => n.id))
+  const haveLinks = new Set(prev.links.map((l) => l.id))
+  const nodes = next.nodes.filter((n) => !haveNodes.has(n.id))
+  const links = next.links.filter((l) => !haveLinks.has(l.id))
+  if (nodes.length === 0 && links.length === 0) return prev
+  return { nodes: [...prev.nodes, ...nodes], links: [...prev.links, ...links] }
 }
 
-// GraphApp is the depth view: the provenance graph for a scope, with an
+// GraphApp is the depth view: an Obsidian-style force graph for a scope, with an
 // aggregate panel (true totals regardless of the node cap) and click-to-expand
-// drilldown. It owns the accumulated element set so expanding a Memory appends
-// its neighborhood without discarding what's already on screen.
+// drilldown that appends a Memory's neighborhood.
 export function GraphApp() {
   const [scope, setScope] = useState('')
   const [scopes, setScopes] = useState<Scope[]>([])
-  const [elements, setElements] = useState<ElementDefinition[]>([])
+  const [data, setData] = useState<GraphData>({ nodes: [], links: [] })
   const [stats, setStats] = useState<GraphStats | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [message, setMessage] = useState('그래프를 불러오는 중…')
@@ -52,13 +53,13 @@ export function GraphApp() {
     setSelection(null)
     try {
       const graph = await loadGraph(next)
-      setElements(toElements(graph))
+      setData(toGraphData(graph))
       setStats(graph.stats)
       setTruncated(graph.truncated)
       setMessage(
         graph.nodes.length === 0
           ? '이 범위에는 표시할 노드가 없습니다.'
-          : `${graph.nodes.length}개 노드 · 기억을 클릭하면 원본·연결 기억을 펼칩니다.`,
+          : `${graph.nodes.length}개 노드 · 드래그하면 딸려오고, 기억을 클릭하면 이웃을 펼칩니다.`,
       )
     } catch {
       setMessage('그래프를 불러오는 중 오류가 발생했습니다.')
@@ -73,7 +74,7 @@ export function GraphApp() {
   async function onExpand(memoryId: string) {
     try {
       const graph = await expandMemory(memoryId)
-      setElements((prev) => mergeElements(prev, toElements(graph)))
+      setData((prev) => mergeGraphData(prev, toGraphData(graph)))
     } catch {
       // A failed drilldown leaves the current graph intact.
     }
@@ -95,7 +96,7 @@ export function GraphApp() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <GraphCanvas elements={elements} onSelect={setSelection} onExpand={onExpand} />
+        <GraphCanvas data={data} onSelect={setSelection} onExpand={onExpand} />
 
         <aside className="w-72 shrink-0 overflow-y-auto border-l border-border bg-card/40 p-5">
           <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
