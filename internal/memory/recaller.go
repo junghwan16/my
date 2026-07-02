@@ -70,10 +70,68 @@ func (r *Recaller) Links(ctx context.Context, id sourcespkg.SourceID) ([]Link, e
 // Memory in scope, so recall doubles as a workspace memory overview. An empty
 // scope spans every scope.
 func (r *Recaller) Recall(ctx context.Context, task, scope string, limit int) ([]RecallResult, error) {
+	if strings.TrimSpace(scope) == "" {
+		// All-scopes: no workspace-key filtering, keep the store's global ranking.
+		return r.rank(ctx, task, "", limit)
+	}
+	// Scoped recall matches by workspace key, not by the raw cwd string, so a
+	// project's memory is found across its renamed/worktree/conductor paths
+	// (ADR-0009). Rank over every scope, then keep the top results whose Source
+	// shares the query's workspace key. Ranking stays global (the store's), we
+	// only filter — so this never reorders, it just selects the right workspace.
+	over := limit * scopeOverfetchFactor
+	if over < scopeOverfetchMin {
+		over = scopeOverfetchMin
+	}
+	ranked, err := r.rank(ctx, task, "", over)
+	if err != nil {
+		return nil, err
+	}
+	key := sourcespkg.WorkspaceKey(scope, sourcespkg.DefaultScopeAliases())
+	kept := make([]RecallResult, 0, limit)
+	for _, result := range ranked {
+		if resultMatchesWorkspaceKey(result, key) {
+			kept = append(kept, result)
+			if len(kept) == limit {
+				break
+			}
+		}
+	}
+	return kept, nil
+}
+
+// scopeOverfetchFactor and scopeOverfetchMin size the candidate pool for a scoped
+// recall: rank this many across all scopes before filtering to the workspace key.
+// It must comfortably exceed the query's in-key hits; at the local scale (a few
+// thousand memories) a fixed floor is enough. A store-side scope_key column
+// (ADR-0009) would remove the over-fetch entirely at larger scale.
+const (
+	scopeOverfetchFactor = 10
+	scopeOverfetchMin    = 100
+)
+
+// rank returns the store's ranking for the task within scope: recent memory when
+// the task is blank, hybrid RRF otherwise. It is the single ranking entry point
+// Recall filters on.
+func (r *Recaller) rank(ctx context.Context, task, scope string, limit int) ([]RecallResult, error) {
 	if strings.TrimSpace(task) == "" {
 		return r.store.RecentRecallResults(ctx, scope, limit)
 	}
 	return r.store.HybridRecallResults(ctx, task, scope, limit)
+}
+
+// resultMatchesWorkspaceKey reports whether any Source a result derives from
+// shares the given workspace key, so scoped recall keeps a memory reachable from
+// its project regardless of which raw path (rename/worktree/conductor) it was
+// captured under.
+func resultMatchesWorkspaceKey(result RecallResult, key string) bool {
+	aliases := sourcespkg.DefaultScopeAliases()
+	for _, source := range result.Sources {
+		if sourcespkg.WorkspaceKey(source.Scope.Value, aliases) == key {
+			return true
+		}
+	}
+	return false
 }
 
 // Get fetches one Memory by id and attaches its Source context, reusing the
