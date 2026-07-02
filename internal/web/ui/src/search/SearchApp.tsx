@@ -3,30 +3,39 @@ import { Network } from 'lucide-react'
 import { recall, loadScopes, getMemory, type RecallResult, type Scope } from '../api'
 import { ScopeSelect } from '../ScopeSelect'
 import { MemoryCard } from './MemoryCard'
+import { Button } from '../components/ui/button'
+
+const PAGE = 30
 
 // SearchApp is the recall surface: type a task, read the memories it surfaces.
-// Memories are short, so results are shown as a single reading column of full
-// cards rather than a master/detail split. An empty query returns recent memory.
+// Results are a single reading column of cards (long text clamps to a snippet);
+// an empty query returns recent memory, and "더 보기" loads a larger page.
 export function SearchApp() {
   const [query, setQuery] = useState('')
   const [scope, setScope] = useState('')
   const [scopes, setScopes] = useState<Scope[]>([])
   const [results, setResults] = useState<RecallResult[]>([])
+  const [limit, setLimit] = useState(PAGE)
   const [status, setStatus] = useState('불러오는 중…')
+  // Single-memory deep links (?m=) show one card without paging.
+  const [single, setSingle] = useState(false)
   const lastQuery = useRef('')
 
-  const runRecall = useCallback(async (q: string, s: string) => {
+  const runRecall = useCallback(async (q: string, s: string, lim: number) => {
     lastQuery.current = q
+    setSingle(false)
     setStatus('떠올리는 중…')
     try {
-      const memories = await recall(q, s)
+      const memories = await recall(q, s, lim)
       setResults(memories)
       setStatus(
         memories.length === 0
           ? q
             ? '떠오른 기억이 없습니다.'
             : '아직 저장된 기억이 없습니다.'
-          : `${memories.length}개의 기억`,
+          : q
+            ? `관련 기억 ${memories.length}개`
+            : `최근 기억 ${memories.length}개`,
       )
     } catch {
       setStatus('오류가 발생했습니다.')
@@ -35,27 +44,40 @@ export function SearchApp() {
 
   useEffect(() => {
     loadScopes().then(setScopes).catch(() => {})
-    // Deep links from the graph: ?m=<id> opens one memory, ?scope=<value>
-    // opens recall filtered to a source's scope.
     const params = new URLSearchParams(window.location.search)
     const memoryId = params.get('m')
     const scopeParam = params.get('scope')
     if (memoryId) {
+      setSingle(true)
       setStatus('그래프에서 연 기억')
       getMemory(memoryId)
         .then((m) => setResults([m]))
-        .catch(() => runRecall('', ''))
+        .catch(() => runRecall('', '', PAGE))
     } else if (scopeParam !== null) {
       setScope(scopeParam)
-      runRecall('', scopeParam)
+      runRecall('', scopeParam, PAGE)
     } else {
-      runRecall('', '')
+      runRecall('', '', PAGE)
     }
   }, [runRecall])
+
+  function search(q: string, s: string) {
+    setLimit(PAGE)
+    runRecall(q, s, PAGE)
+  }
+
+  function loadMore() {
+    const next = limit + PAGE
+    setLimit(next)
+    runRecall(lastQuery.current, scope, next)
+  }
 
   function onUpdated(updated: RecallResult) {
     setResults((prev) => prev.map((r) => (r.memory_id === updated.memory_id ? updated : r)))
   }
+
+  // The store likely has more when a full page came back.
+  const canLoadMore = !single && results.length >= limit
 
   return (
     <div className="min-h-screen">
@@ -70,7 +92,7 @@ export function SearchApp() {
             value={scope}
             onChange={(next) => {
               setScope(next)
-              runRecall(lastQuery.current, next)
+              search(lastQuery.current, next)
             }}
           />
           <a
@@ -87,7 +109,7 @@ export function SearchApp() {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            runRecall(query.trim(), scope)
+            search(query.trim(), scope)
           }}
         >
           <input
@@ -113,6 +135,14 @@ export function SearchApp() {
             />
           ))}
         </ul>
+
+        {canLoadMore && (
+          <div className="mt-4 flex justify-center">
+            <Button variant="outline" size="sm" onClick={loadMore}>
+              더 보기
+            </Button>
+          </div>
+        )}
       </main>
     </div>
   )

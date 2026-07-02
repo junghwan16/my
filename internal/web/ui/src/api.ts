@@ -71,10 +71,12 @@ async function getJSON<T>(url: string): Promise<T> {
 }
 
 // recall runs the shared recall seam. Scope is always sent explicitly: an empty
-// value is the all-scopes choice, a non-empty value filters to that Scope.
-export async function recall(query: string, scope: string): Promise<RecallResult[]> {
+// value is the all-scopes choice, a non-empty value filters to that Scope. A
+// positive limit caps the result count; 0 uses the store default.
+export async function recall(query: string, scope: string, limit = 0): Promise<RecallResult[]> {
+  const limitParam = limit > 0 ? `&limit=${limit}` : ''
   const data = await getJSON<{ memories: RecallResult[] }>(
-    `/api/recall?query=${encodeURIComponent(query)}&scope=${encodeURIComponent(scope)}`,
+    `/api/recall?query=${encodeURIComponent(query)}&scope=${encodeURIComponent(scope)}${limitParam}`,
   )
   return data.memories ?? []
 }

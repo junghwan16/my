@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Pencil, RotateCcw, FileText } from 'lucide-react'
 import { editMemory, type RecallResult } from '../api'
@@ -6,6 +6,7 @@ import { shortId, timeAgo, scopeLabel } from '../format'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Textarea } from '../components/ui/textarea'
+import { cn } from '../lib/utils'
 
 // Highlight matches of the query within the text, in the accent color.
 function highlight(text: string, query: string) {
@@ -39,15 +40,27 @@ interface Props {
   onUpdated: (updated: RecallResult) => void
 }
 
-// MemoryCard shows one recalled memory in full: the text (the thing you read),
-// a mono meta line, the single Source it melted from, and inline editing (a
-// non-destructive Override, ADR-0010).
+// MemoryCard shows one recalled memory. Long text is clamped to a scannable
+// snippet with a "더 보기" toggle so a list of results stays skimmable; short
+// memories show in full. A mono meta line carries id / agent / time / provenance,
+// and editing layers a non-destructive Override (ADR-0010).
 export function MemoryCard({ result, query, onUpdated }: Props) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [showOriginal, setShowOriginal] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [clamped, setClamped] = useState(false)
+  const textRef = useRef<HTMLParagraphElement>(null)
   const source = result.sources[0]
+
+  // Detect whether the snippet is actually truncated, so the toggle only shows
+  // when there's more to read.
+  useEffect(() => {
+    const el = textRef.current
+    if (!el || expanded) return
+    setClamped(el.scrollHeight - el.clientHeight > 4)
+  }, [result.text, expanded])
 
   async function save() {
     setSaving(true)
@@ -81,7 +94,7 @@ export function MemoryCard({ result, query, onUpdated }: Props) {
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            rows={6}
+            rows={8}
             autoFocus
             className="text-[15px] leading-relaxed"
           />
@@ -96,9 +109,25 @@ export function MemoryCard({ result, query, onUpdated }: Props) {
           </div>
         </div>
       ) : (
-        <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-foreground/95">
-          {highlight(result.text, query)}
-        </p>
+        <>
+          <p
+            ref={textRef}
+            className={cn(
+              'whitespace-pre-wrap text-[15px] leading-relaxed text-foreground/95',
+              !expanded && 'line-clamp-4',
+            )}
+          >
+            {highlight(result.text, query)}
+          </p>
+          {(clamped || expanded) && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1.5 text-xs font-medium text-primary hover:underline"
+            >
+              {expanded ? '접기' : '더 보기'}
+            </button>
+          )}
+        </>
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-muted-foreground">
@@ -122,7 +151,6 @@ export function MemoryCard({ result, query, onUpdated }: Props) {
             </span>
           </>
         )}
-        {/* Actions: shown on hover to keep the card quiet at rest. */}
         {!editing && (
           <span className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <Button
