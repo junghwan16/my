@@ -26,15 +26,6 @@ export function shortId(id: string, keep = 8): string {
   return rest.length > keep ? prefix + rest.slice(0, keep) + '…' : id
 }
 
-// firstLine returns the first non-empty line of a memory, for dense list rows.
-export function firstLine(text: string): string {
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim()
-    if (trimmed) return trimmed
-  }
-  return text.trim()
-}
-
 // scopeLabel renders a Scope for display; a path-like value shows its last two
 // segments so long workspace paths stay legible.
 export function scopeLabel(value: string): string {
