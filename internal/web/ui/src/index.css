@@ -1,0 +1,105 @@
+@import 'tailwindcss';
+
+/* gieok web UI — Linear-grade dark theme (ADR-0009).
+ * Near-black canvas, a single indigo accent, Inter, hairline borders. Tokens
+ * follow the shadcn semantic naming so the ui/ primitives map cleanly. */
+
+:root {
+  --background: #0b0b0e;
+  --foreground: #f7f8f8;
+
+  --card: #131317;
+  --card-foreground: #f7f8f8;
+  --popover: #161619;
+  --popover-foreground: #f7f8f8;
+
+  --primary: #5e6ad2; /* Linear indigo */
+  --primary-foreground: #ffffff;
+
+  --secondary: #1b1b20;
+  --secondary-foreground: #f7f8f8;
+  --muted: #1b1b20;
+  --muted-foreground: #8a8f98;
+  --accent: #26262c;
+  --accent-foreground: #f7f8f8;
+
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+
+  --border: #24242b;
+  --input: #24242b;
+  --ring: #5e6ad2;
+
+  /* Graph node/edge families (depth view). */
+  --graph-memory: #7c8cf0;
+  --graph-source: #3aa8a0;
+  --graph-relation: #6f76c9;
+  --graph-edge: #35353d;
+
+  --radius: 0.5rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system,
+    'Apple SD Gothic Neo', 'Pretendard', 'Malgun Gothic', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    color-scheme: dark;
+  }
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--primary) 40%, transparent);
+  }
+  /* Thin Linear-style scrollbars. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -206,6 +206,29 @@ func (s *Store) upsertMemories(ctx context.Context, tx *sql.Tx, memories []Memor
 	return nil
 }
 
+// SetMemoryOverride layers a human Override on a Memory's text without touching
+// its identity, provenance, or search index (ADR-0010). An empty override clears
+// it, restoring the agent's original text. It reports whether the Memory exists.
+func (s *Store) SetMemoryOverride(ctx context.Context, id MemoryID, override string) (bool, error) {
+	var result sql.Result
+	var err error
+	if strings.TrimSpace(override) == "" {
+		result, err = s.db.ExecContext(ctx,
+			"UPDATE memories SET text_override = NULL WHERE id = ?", string(id))
+	} else {
+		result, err = s.db.ExecContext(ctx,
+			"UPDATE memories SET text_override = ? WHERE id = ?", override, string(id))
+	}
+	if err != nil {
+		return false, fmt.Errorf("set memory override: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read memory override result: %w", err)
+	}
+	return affected > 0, nil
+}
+
 func (s *Store) upsertLinks(ctx context.Context, tx *sql.Tx, links []Link) error {
 	for i := range links {
 		link := links[i]
@@ -842,7 +865,8 @@ func memoryColumnsSQL() string {
 		m.kind,
 		m.text,
 		m.created_at,
-		m.metadata_json`
+		m.metadata_json,
+		m.text_override`
 }
 
 func linkColumnsSQL() string {
@@ -898,6 +922,7 @@ func scanMemoryRow(scanner rowScanner) (memoryRow, error) {
 		&row.Text,
 		&createdAt,
 		&row.MetadataJSON,
+		&row.TextOverride,
 	); err != nil {
 		return memoryRow{}, err
 	}
@@ -1019,6 +1044,7 @@ func scanCandidateVector(scanner rowScanner) (candidateVector, error) {
 		&row.Text,
 		&createdAt,
 		&row.MetadataJSON,
+		&row.TextOverride,
 		&row.VectorBlob,
 	); err != nil {
 		return candidateVector{}, err

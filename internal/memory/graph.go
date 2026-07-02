@@ -173,7 +173,7 @@ type memoryDegreeRow struct {
 func (s *Store) memoryRelationDegree(ctx context.Context, scope string) ([]memoryDegreeRow, error) {
 	// A LEFT JOIN keeps Relation-free Memories (degree 0); counting the distinct
 	// neighbour over both from/to directions gives an undirected degree.
-	query := `SELECT m.id, m.text, count(DISTINCT rel.other) AS degree
+	query := `SELECT m.id, COALESCE(m.text_override, m.text), count(DISTINCT rel.other) AS degree
 		FROM memories AS m
 		JOIN memory_links AS link ON link.memory_id = m.id
 		JOIN sources AS sr ON sr.id = link.source_id
@@ -413,7 +413,7 @@ type relationNeighborRow struct {
 // Sources. It is unrestricted by scope, like the rest of the drilldown. Ordered by
 // id for stable output.
 func (s *Store) memoryRelationNeighbors(ctx context.Context, id MemoryID) ([]relationNeighborRow, error) {
-	query := `SELECT DISTINCT nbr.id, nbr.text
+	query := `SELECT DISTINCT nbr.id, COALESCE(nbr.text_override, nbr.text)
 		FROM (
 			SELECT to_memory_id AS other FROM memory_relations WHERE from_memory_id = ?
 			UNION
@@ -479,7 +479,7 @@ func (s *Store) MemoryNeighborhood(ctx context.Context, id MemoryID) (Graph, boo
 	memoryNodes = append(memoryNodes, GraphNode{
 		ID:    string(mem.ID),
 		Kind:  GraphNodeMemory,
-		Label: mem.Text,
+		Label: mem.EffectiveText(),
 		Size:  len(neighbors),
 	})
 	relations := make([]GraphRelation, 0, len(neighbors))

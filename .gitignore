@@ -1,2 +1,6 @@
 .cache/
 .claude/
+
+# Web UI build tooling (dev only). The build output in internal/web/static
+# IS committed and embedded — do not ignore it.
+internal/web/ui/node_modules/

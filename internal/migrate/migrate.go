@@ -21,7 +21,7 @@ import (
 
 const (
 	schemaName    = "gieok"
-	schemaVersion = int64(6)
+	schemaVersion = int64(7)
 )
 
 // Apply brings db up to the latest schema version. Before changing an existing
@@ -335,12 +335,15 @@ func (sourceEventModel) TableName() string {
 }
 
 type memoryModel struct {
-	ID           string            `gorm:"column:id;type:text;primaryKey"`
-	Agent        string            `gorm:"column:agent;type:text;not null;index:memories_agent_idx"`
-	Kind         string            `gorm:"column:kind;type:text;not null"`
-	Text         string            `gorm:"column:text;type:text;not null"`
-	CreatedAt    time.Time         `gorm:"column:created_at;type:text;not null"`
-	MetadataJSON string            `gorm:"column:metadata_json;type:text;not null"`
+	ID           string    `gorm:"column:id;type:text;primaryKey"`
+	Agent        string    `gorm:"column:agent;type:text;not null;index:memories_agent_idx"`
+	Kind         string    `gorm:"column:kind;type:text;not null"`
+	Text         string    `gorm:"column:text;type:text;not null"`
+	CreatedAt    time.Time `gorm:"column:created_at;type:text;not null"`
+	MetadataJSON string    `gorm:"column:metadata_json;type:text;not null"`
+	// TextOverride is a nullable human correction layered over Text without
+	// changing the Memory's hashed identity or provenance (ADR-0010).
+	TextOverride *string           `gorm:"column:text_override;type:text"`
 	Links        []memoryLinkModel `gorm:"foreignKey:MemoryID;references:ID;constraint:OnDelete:CASCADE"`
 }
 

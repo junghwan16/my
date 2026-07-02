@@ -21,10 +21,17 @@ type SourceRef struct {
 // can share the same structure. Sources is ordered by Source ID
 // for stable output.
 type RecallResult struct {
-	MemoryID  MemoryID    `json:"memory_id"`
-	Agent     string      `json:"agent"`
-	Kind      MemoryKind  `json:"kind"`
-	Text      string      `json:"text"`
-	CreatedAt time.Time   `json:"created_at"`
-	Sources   []SourceRef `json:"sources"`
+	MemoryID MemoryID   `json:"memory_id"`
+	Agent    string     `json:"agent"`
+	Kind     MemoryKind `json:"kind"`
+	// Text is the effective text: the human Override when present, otherwise the
+	// agent's original text (ADR-0010).
+	Text string `json:"text"`
+	// Edited is true when a human Override is layered over the agent's memory;
+	// OriginalText then carries the agent's text so callers can show or restore
+	// it. Both are omitted for unedited memories.
+	Edited       bool        `json:"edited,omitempty"`
+	OriginalText string      `json:"original_text,omitempty"`
+	CreatedAt    time.Time   `json:"created_at"`
+	Sources      []SourceRef `json:"sources"`
 }

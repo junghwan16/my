@@ -1,6 +1,12 @@
 [tools]
 go = "1.25.10"
 golangci-lint = "2.12.2"
+node = "25.9.0"
+
+[tasks.ui]
+description = "Build the web UI into internal/web/static (embedded by go:embed)."
+dir = "internal/web/ui"
+run = "npm ci && npm run build"
 
 [tasks.fmt]
 description = "Format Go files with gofmt."
@@ -26,5 +32,12 @@ diff -u "$tmp/go.sum" go.sum
 
 golangci-lint run
 go test ./...
+
+# Rebuild the committed web UI and fail if the embedded assets drift from
+# source (mirrors the go mod tidy diff check above). The Go binary embeds
+# internal/web/static, so it must always match internal/web/ui.
+( cd internal/web/ui && npm ci && npm run build )
+git diff --exit-code -- internal/web/static
+
 git diff --check
 '''

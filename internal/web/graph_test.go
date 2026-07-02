@@ -3,9 +3,11 @@ package web_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -326,20 +328,43 @@ func TestServesGraphPage(t *testing.T) {
 	server := httptest.NewServer(web.NewServer(memoriespkg.NewRecaller(memories), "").Handler())
 	defer server.Close()
 
-	for _, path := range []string{"/graph", "/vendor/cytoscape.min.js"} {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+path, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			closeResp(t, resp)
-			t.Fatalf("GET %s status = %d, want 200 (page + vendored library must serve offline)", path, resp.StatusCode)
-		}
+	// The graph page and the bundled JS it references (cytoscape is compiled in,
+	// not a CDN) must both serve so the surface works fully offline. The asset
+	// filename is content-hashed, so we discover it from the page rather than
+	// hard-coding it.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/graph", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
 		closeResp(t, resp)
+		t.Fatalf("GET /graph status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	closeResp(t, resp)
+	if err != nil {
+		t.Fatalf("read graph page: %v", err)
+	}
+
+	asset := regexp.MustCompile(`/assets/[^"']+\.js`).FindString(string(body))
+	if asset == "" {
+		t.Fatalf("graph page references no bundled JS asset:\n%s", body)
+	}
+	assetReq, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+asset, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetResp, err := http.DefaultClient.Do(assetReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeResp(t, assetResp)
+	if assetResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200 (bundled library must serve offline)", asset, assetResp.StatusCode)
 	}
 }
 

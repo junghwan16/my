@@ -23,6 +23,11 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '25.9.0'
+
       - name: Check Go formatting
         run: |
           files="$(find . -name '*.go' -not -path './.git/*' -not -path './.cache/*' -print0 | xargs -0 gofmt -l)"
@@ -47,6 +52,11 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+      - name: Check web UI freshness
+        run: |
+          (cd internal/web/ui && npm ci && npm run build)
+          git diff --exit-code -- internal/web/static
 
       - name: Check diff hygiene
         run: git diff --check

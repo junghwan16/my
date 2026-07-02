@@ -17,6 +17,7 @@ type MemoryReader interface {
 	HybridRecallResults(ctx context.Context, query, scope string, limit int) ([]RecallResult, error)
 	RecentRecallResults(ctx context.Context, scope string, limit int) ([]RecallResult, error)
 	RecallResultByID(ctx context.Context, id MemoryID) (RecallResult, bool, error)
+	SetMemoryOverride(ctx context.Context, id MemoryID, override string) (bool, error)
 	Scopes(ctx context.Context) ([]sourcespkg.Scope, error)
 	Stats(ctx context.Context) (Stats, error)
 	Graph(ctx context.Context, scope string, cap int) (Graph, error)
@@ -37,6 +38,20 @@ func NewRecaller(store MemoryReader) *Recaller {
 // SourceMemories returns the memories linked to a source.
 func (r *Recaller) SourceMemories(ctx context.Context, id sourcespkg.SourceID) ([]Memory, error) {
 	return r.store.SourceMemories(ctx, id)
+}
+
+// EditMemory sets or clears the human Override on a Memory (an empty override
+// restores the agent's original text) and returns the updated result. found is
+// false when no Memory has the id.
+func (r *Recaller) EditMemory(ctx context.Context, id MemoryID, override string) (RecallResult, bool, error) {
+	found, err := r.store.SetMemoryOverride(ctx, id, override)
+	if err != nil {
+		return RecallResult{}, false, err
+	}
+	if !found {
+		return RecallResult{}, false, nil
+	}
+	return r.store.RecallResultByID(ctx, id)
 }
 
 // Search returns memories relevant to query, ranked best-first, optionally

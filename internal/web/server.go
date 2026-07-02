@@ -36,6 +36,7 @@ type recaller interface {
 	Scopes(ctx context.Context) ([]sourcespkg.Scope, error)
 	Graph(ctx context.Context, scope string, cap int) (memoriespkg.Graph, error)
 	MemoryNeighborhood(ctx context.Context, id memoriespkg.MemoryID) (memoriespkg.Graph, bool, error)
+	EditMemory(ctx context.Context, id memoriespkg.MemoryID, override string) (memoriespkg.RecallResult, bool, error)
 }
 
 // compile-time check that *memories.Recaller satisfies the consumed interface.
@@ -88,6 +89,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/scopes", s.handleScopes)
 	mux.HandleFunc("/api/graph", s.handleGraph)
 	mux.HandleFunc("/api/graph/memory", s.handleMemoryNeighborhood)
+	mux.HandleFunc("/api/memory/edit", s.handleMemoryEdit)
 	return mux
 }
 
@@ -242,6 +244,48 @@ func (s *Server) handleMemoryNeighborhood(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, graph)
+}
+
+// editRequest is the /api/memory/edit body: the Memory to edit and the human
+// Override text. An empty text clears the Override, restoring the agent's
+// original memory.
+type editRequest struct {
+	MemoryID string `json:"memory_id"`
+	Text     string `json:"text"`
+}
+
+// handleMemoryEdit layers or clears a human Override on a Memory (ADR-0010),
+// leaving its hashed identity and provenance untouched, and writes the updated
+// result. It is the one write endpoint on the web surface. A missing Memory is
+// 404 so the UI can render a clean miss.
+func (s *Server) handleMemoryEdit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req editRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	id := strings.TrimSpace(req.MemoryID)
+	if id == "" {
+		http.Error(w, "memory_id is required", http.StatusBadRequest)
+		return
+	}
+
+	result, found, err := s.recaller.EditMemory(r.Context(), memoriespkg.MemoryID(id), req.Text)
+	if err != nil {
+		http.Error(w, "edit failed", http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, result)
 }
 
 // writeJSON encodes v as the JSON response body with the shared content type. A

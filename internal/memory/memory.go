@@ -33,7 +33,7 @@ type RelationKind string
 // authors during ingest when it connects a new memory to an existing one.
 const RelationKindRelates RelationKind = "relates"
 
-// Memory is an agent-produced memory record. Every Memory derives from at least
+// Memory is an agent-produced memory record. Every Memory derives from exactly
 // one source, stored as a Link.
 type Memory struct {
 	ID           MemoryID        `json:"id"`
@@ -42,7 +42,23 @@ type Memory struct {
 	Text         string          `json:"text"`
 	CreatedAt    time.Time       `json:"created_at"`
 	MetadataJSON json.RawMessage `json:"metadata_json"`
+	// Override is a human correction layered over the agent's Text without
+	// changing the Memory's identity or provenance (ADR-0010). Empty means the
+	// agent's Text stands unedited.
+	Override string `json:"-"`
 }
+
+// EffectiveText is the text to show and return: the human Override when present,
+// otherwise the agent's original Text.
+func (m Memory) EffectiveText() string {
+	if m.Override != "" {
+		return m.Override
+	}
+	return m.Text
+}
+
+// Edited reports whether a human Override is layered over the agent's Text.
+func (m Memory) Edited() bool { return m.Override != "" }
 
 // Link connects a source to an agent-produced memory.
 type Link struct {

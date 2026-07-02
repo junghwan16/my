@@ -1,6 +1,7 @@
 package memories
 
 import (
+	"database/sql"
 	"time"
 
 	sourcespkg "github.com/junghwan16/gieok/internal/source"
@@ -17,6 +18,8 @@ type memoryRow struct {
 	Text         string
 	CreatedAt    time.Time
 	MetadataJSON string
+	// TextOverride is the human correction, NULL when the memory is unedited.
+	TextOverride sql.NullString
 }
 
 type linkRow struct {
@@ -46,6 +49,7 @@ func (r memoryRow) toMemory() Memory {
 		Text:         r.Text,
 		CreatedAt:    r.CreatedAt,
 		MetadataJSON: []byte(r.MetadataJSON),
+		Override:     r.TextOverride.String,
 	}
 }
 
@@ -137,13 +141,19 @@ func assembleRecallResults(memories []Memory, refs []sourceRefRow) []RecallResul
 
 	recallResults := make([]RecallResult, 0, len(memories))
 	for _, mem := range memories {
+		originalText := ""
+		if mem.Edited() {
+			originalText = mem.Text
+		}
 		recallResults = append(recallResults, RecallResult{
-			MemoryID:  mem.ID,
-			Agent:     mem.Agent,
-			Kind:      mem.Kind,
-			Text:      mem.Text,
-			CreatedAt: mem.CreatedAt,
-			Sources:   byMemory[string(mem.ID)],
+			MemoryID:     mem.ID,
+			Agent:        mem.Agent,
+			Kind:         mem.Kind,
+			Text:         mem.EffectiveText(),
+			Edited:       mem.Edited(),
+			OriginalText: originalText,
+			CreatedAt:    mem.CreatedAt,
+			Sources:      byMemory[string(mem.ID)],
 		})
 	}
 	return recallResults
