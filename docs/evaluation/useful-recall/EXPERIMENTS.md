@@ -57,6 +57,15 @@ Hold the corpus and scenario set fixed; vary exactly one factor per experiment:
   data actually is.
 - **Corpus confound.** The store is being re-ingested with the improved prompt.
   Compare rankers only within one corpus snapshot; never across a changing store.
+- **Ablation scope confound.** Only the hybrid mode goes through the product path
+  `Recaller.Recall`, which matches by WorkspaceKey (ADR-0009). The `lexical` and
+  `semantic` ablation probes call the store's exact-scope `Search`/`SearchSemantic`
+  directly. So at a canonical scope whose data was captured under another raw path
+  (e.g. `/personal/gieok` with memory under `/personal/my`), lexical/semantic read
+  0 while hybrid reads the key-matched set — an apples-to-oranges comparison. For a
+  fair ranker ablation, run `--mode all` with `--scope` set to the raw path where
+  the data lives, or compare rankers on `--all-scopes`; reserve the canonical scope
+  for validating the hybrid product path.
 
 ## Running it
 

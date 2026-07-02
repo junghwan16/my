@@ -109,6 +109,25 @@ func TestRecallAllScopesIsUnfiltered(t *testing.T) {
 	}
 }
 
+func TestRecallScopedDefaultsLimitWhenNonPositive(t *testing.T) {
+	// A non-positive limit (the CLI default when --limit is omitted) must cap the
+	// scoped path at the store default, not spill the whole over-fetch.
+	all := make([]RecallResult, 0, defaultSearchLimit+10)
+	for i := 0; i < defaultSearchLimit+10; i++ {
+		all = append(all, resultInScope(string(rune('a'+i%26))+"-", "/Users/jeff.cho/personal/gieok"))
+	}
+	reader := fakeReader{hybrid: map[string][]RecallResult{"": all}}
+	rec := NewRecaller(reader)
+
+	got, err := rec.Recall(context.Background(), "task", "/Users/jeff.cho/personal/gieok", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != defaultSearchLimit {
+		t.Fatalf("scoped recall with limit=0 returned %d, want the store default %d", len(got), defaultSearchLimit)
+	}
+}
+
 func TestRecallScopedRespectsLimitAfterFilter(t *testing.T) {
 	all := []RecallResult{
 		resultInScope("m1", "/Users/jeff.cho/personal/my"),

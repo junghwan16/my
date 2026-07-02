@@ -70,6 +70,14 @@ func (r *Recaller) Links(ctx context.Context, id sourcespkg.SourceID) ([]Link, e
 // Memory in scope, so recall doubles as a workspace memory overview. An empty
 // scope spans every scope.
 func (r *Recaller) Recall(ctx context.Context, task, scope string, limit int) ([]RecallResult, error) {
+	// Resolve the default here so both paths cap identically: without this the
+	// scoped path (which loops until len(kept) == limit) would never hit a
+	// non-positive limit and return the whole over-fetch, while the all-scopes
+	// path gets the store's default — an inconsistent result size for the common
+	// CLI case of no --limit (limit == 0).
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
 	if strings.TrimSpace(scope) == "" {
 		// All-scopes: no workspace-key filtering, keep the store's global ranking.
 		return r.rank(ctx, task, "", limit)
