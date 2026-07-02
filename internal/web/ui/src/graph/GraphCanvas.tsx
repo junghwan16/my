@@ -4,7 +4,8 @@ import {
   forceSimulation,
   forceLink,
   forceManyBody,
-  forceCenter,
+  forceX,
+  forceY,
   forceCollide,
   type Simulation,
 } from 'd3-force'
@@ -186,10 +187,14 @@ function createEngine(
   let fitPending = false
 
   const sim: Simulation<FNode, FLink> = forceSimulation<FNode>([])
-    .force('charge', forceManyBody<FNode>().strength(-150))
-    .force('link', forceLink<FNode, FLink>([]).id((d) => d.id).distance(48).strength(0.6))
-    .force('center', forceCenter(0, 0))
-    .force('collide', forceCollide<FNode>((d) => radius(d) + 3))
+    // distanceMax keeps repulsion local, so separate clusters don't shove each
+    // other across the canvas; forceX/Y gently gather disconnected clusters
+    // toward the center instead of letting them drift apart.
+    .force('charge', forceManyBody<FNode>().strength(-95).distanceMax(260))
+    .force('link', forceLink<FNode, FLink>([]).id((d) => d.id).distance(44).strength(0.6))
+    .force('x', forceX(0).strength(0.03))
+    .force('y', forceY(0).strength(0.04))
+    .force('collide', forceCollide<FNode>((d) => radius(d) + 5))
     .alphaDecay(0.02)
     .velocityDecay(0.35)
     .on('tick', draw)
