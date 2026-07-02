@@ -1,0 +1,26 @@
+run:
+  id: 2026-07-02-workspace-key-close-gap
+  change: "Recaller.Recall now matches by WorkspaceKey (ADR-0009 step 1) + []-parse fix + junk cleanup"
+  store: "snapshot (566 memories)"
+  scenarios: "docs/evaluation/useful-recall/scenarios.json (N=3), scope now canonical /personal/gieok"
+
+scope_gap_closed:
+  query: "README/CLI help에 my 이름 남았는지"
+  canonical_gieok_before: "0 results"
+  canonical_gieok_after: "3 results"
+  note: "Data captured under legacy /my is now recalled from the canonical /gieok path because both share one WorkspaceKey."
+
+eval_hybrid:
+  my_scope:        { hit_rate: "3/3 (100%)", mrr: 1.000, verdict: PASS }
+  canonical_scope: { hit_rate: "3/3 (100%)", mrr: 1.000, verdict: PASS }
+  vs_before: "MRR 0.833 -> 1.000 (pooling across the key surfaces the best memory at rank 1; scenario 001 HIT@2 -> HIT@1)"
+
+progression_summary:
+  - "original junk corpus, exact-scope: 0/3"
+  - "re-ingest + #24 prompt + []-fix + cleanup, /my scope: 3/3 (MRR 0.833)"
+  - "+ WorkspaceKey scoped recall, canonical scope: 3/3 (MRR 1.000)"
+
+caveats:
+  - "N=3 underpowered; judge cosine semantic-biased (anchors mitigate)."
+  - "Recaller overfetch (100) is a local-scale approximation; store-side scope_key column is the scale path (ADR-0009 step 2)."
+  - "Full re-ingest of remaining sources still running in background."

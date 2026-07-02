@@ -64,11 +64,12 @@ memory  save session files, build Memory, and recall it
 mcp     expose recall/status/get tools to MCP clients
 web     serve a local search page and /api/recall over HTTP`
 
-const usageMemory = `usage: gieok memory <import|ingest|recall>
+const usageMemory = `usage: gieok memory <import|ingest|recall|eval>
 
 import  save Codex/Claude Code session files as Source
 ingest  turn saved Sources into Memory
-recall  find useful Memory for a task or question`
+recall  find useful Memory for a task or question
+eval    measure recall usefulness against replay scenarios`
 
 // errUsage is the top-level usage error.
 var errUsage = errors.New(usageTop)
@@ -114,6 +115,8 @@ func runMemory(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return runMemoryIngest(ctx, args, stdout, stderr, now)
 	case "recall":
 		return runMemoryRecall(ctx, args, stdout, stderr)
+	case "eval":
+		return runMemoryEval(ctx, args, stdout, stderr)
 	default:
 		return errMemoryUsage
 	}

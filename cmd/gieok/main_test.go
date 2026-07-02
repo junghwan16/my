@@ -104,7 +104,7 @@ func TestHelpReturnsCleanly(t *testing.T) {
 		{
 			name: "memory",
 			args: []string{"memory", "-h"},
-			want: "usage: gieok memory <import|ingest|recall>",
+			want: "usage: gieok memory <import|ingest|recall|eval>",
 		},
 		{
 			name: "import",

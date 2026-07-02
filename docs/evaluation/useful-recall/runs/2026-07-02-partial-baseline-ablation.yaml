@@ -1,0 +1,38 @@
+run:
+  id: 2026-07-02-partial-baseline-ablation
+  ran_at: "2026-07-02T01:18:43+0900"
+  git_head: "327fbab (eval/recall-harness)"
+  store: "snapshot of ~/.local/share/gieok/memory/gieok.db at 753 memories; re-ingest in progress (/my scope 35/221 rebuilt)"
+  scenarios: "docs/evaluation/useful-recall/scenarios.json (N=3, underpowered)"
+  command: "gieok memory eval --mode all --min-sim {0.45,0.60}"
+
+hypotheses_tested:
+  - "judge min-sim calibration for bge-m3 embeddings"
+  - "ranker ablation: hybrid vs lexical vs semantic"
+
+results:
+  min_sim_0_45:
+    hybrid:   { hit_rate: "2/3 (67%)", mrr: 0.667 }
+    lexical:  { hit_rate: "0/3 (0%)",  mrr: 0.000 }
+    semantic: { hit_rate: "2/3 (67%)", mrr: 0.667 }
+  min_sim_0_60:
+    all: "0/3 (judge floor too strict for bge-m3)"
+  per_scenario_hybrid_0_45:
+    - { id: useful-recall-001-session-capture, outcome: "MISS", best_sim: 0.445 }
+    - { id: useful-recall-002-semantic-floor,  outcome: "HIT@1", best_sim: 0.554 }
+    - { id: useful-recall-003-gieok-rename,     outcome: "HIT@1", best_sim: 0.584 }
+
+findings:
+  - "bge-m3 cosine is compressed: real hits score 0.55-0.58, so a 0.60 judge floor misses every true hit. Recalibrated the eval default min-sim to 0.45 (mirrors the store's 0.40 recall floor)."
+  - "Lexical ranker alone hits 0/3 on paraphrased Korean tasks (FTS implicit-AND is brittle to paraphrase). Semantic carries recall; hybrid == semantic here because lexical contributes no signal to fuse."
+  - "Partial corpus (35/221 in scope) already reaches 2/3. Scenario 001 is a near-miss (0.445); re-check after full re-ingest — its Expected Memory may not be rebuilt yet."
+
+threats_to_validity:
+  - "N=3 is underpowered; treat as directional."
+  - "Corpus is mid-re-ingest (partial); not the final measurement."
+  - "Judge uses embedding cosine (same signal as semantic ranker) -> biases toward semantic/hybrid. Anchors partially mitigate."
+
+next:
+  - "Re-run --mode all after re-ingest completes for the real baseline."
+  - "If lexical stays at 0 across a fuller set, test whether hybrid ever beats semantic (may need exact-term scenarios where lexical helps)."
+  - "Grow scenarios toward 10-15 with a held-out split before tuning ranking params."
