@@ -1,39 +1,13 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
-import {
-  loadGraph,
-  loadScopes,
-  expandMemory,
-  type GraphStats,
-  type Scope,
-} from '../api'
+import { ArrowLeft, MousePointerClick } from 'lucide-react'
+import { loadGraph, loadScopes, type GraphStats, type Scope } from '../api'
 import { ScopeSelect } from '../ScopeSelect'
 import { shortId, scopeLabel } from '../format'
-import { GraphCanvas, toGraphData, type GraphData } from './GraphCanvas'
+import { GraphCanvas, toGraphData, type GraphData, type NodeInfo } from './GraphCanvas'
 
-interface Selection {
-  id: string
-  kind: string
-  label: string
-  metric: number
-  scope: string
-}
-
-// mergeGraphData appends a neighborhood without discarding what's on screen,
-// preserving existing node/link object references so the live simulation keeps
-// its state (react-force-graph mutates those objects in place).
-function mergeGraphData(prev: GraphData, next: GraphData): GraphData {
-  const haveNodes = new Set(prev.nodes.map((n) => n.id))
-  const haveLinks = new Set(prev.links.map((l) => l.id))
-  const nodes = next.nodes.filter((n) => !haveNodes.has(n.id))
-  const links = next.links.filter((l) => !haveLinks.has(l.id))
-  if (nodes.length === 0 && links.length === 0) return prev
-  return { nodes: [...prev.nodes, ...nodes], links: [...prev.links, ...links] }
-}
-
-// GraphApp is the depth view: an Obsidian-style force graph for a scope, with an
-// aggregate panel (true totals regardless of the node cap) and click-to-expand
-// drilldown that appends a Memory's neighborhood.
+// GraphApp is the overview + jump-off: an Obsidian-style force graph of a scope
+// where hovering previews a node and clicking opens it in the recall view —
+// a memory jumps to that memory, a source to its scope's recall.
 export function GraphApp() {
   const [scope, setScope] = useState('')
   const [scopes, setScopes] = useState<Scope[]>([])
@@ -41,7 +15,7 @@ export function GraphApp() {
   const [stats, setStats] = useState<GraphStats | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [message, setMessage] = useState('그래프를 불러오는 중…')
-  const [selection, setSelection] = useState<Selection | null>(null)
+  const [hovered, setHovered] = useState<NodeInfo | null>(null)
 
   useEffect(() => {
     loadScopes().then(setScopes).catch(() => {})
@@ -50,7 +24,7 @@ export function GraphApp() {
 
   async function fetchGraph(next: string) {
     setMessage('그래프를 불러오는 중…')
-    setSelection(null)
+    setHovered(null)
     try {
       const graph = await loadGraph(next)
       setData(toGraphData(graph))
@@ -59,24 +33,18 @@ export function GraphApp() {
       setMessage(
         graph.nodes.length === 0
           ? '이 범위에는 표시할 노드가 없습니다.'
-          : `${graph.nodes.length}개 노드 · 드래그하면 딸려오고, 기억을 클릭하면 이웃을 펼칩니다.`,
+          : `${graph.nodes.length}개 노드`,
       )
     } catch {
       setMessage('그래프를 불러오는 중 오류가 발생했습니다.')
     }
   }
 
-  function onScopeChange(next: string) {
-    setScope(next)
-    fetchGraph(next)
-  }
-
-  async function onExpand(memoryId: string) {
-    try {
-      const graph = await expandMemory(memoryId)
-      setData((prev) => mergeGraphData(prev, toGraphData(graph)))
-    } catch {
-      // A failed drilldown leaves the current graph intact.
+  function onOpen(node: NodeInfo) {
+    if (node.kind === 'memory') {
+      window.location.href = `/?m=${encodeURIComponent(node.id)}`
+    } else {
+      window.location.href = `/?scope=${encodeURIComponent(node.scope)}`
     }
   }
 
@@ -91,23 +59,27 @@ export function GraphApp() {
           <span className="font-mono text-[11px] text-muted-foreground">provenance 그래프</span>
         </div>
         <div className="ml-auto">
-          <ScopeSelect scopes={scopes} value={scope} onChange={onScopeChange} />
+          <ScopeSelect
+            scopes={scopes}
+            value={scope}
+            onChange={(next) => {
+              setScope(next)
+              fetchGraph(next)
+            }}
+          />
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <GraphCanvas data={data} onSelect={setSelection} onExpand={onExpand} />
+        <GraphCanvas data={data} onHoverNode={setHovered} onOpen={onOpen} />
 
-        <aside className="w-72 shrink-0 overflow-y-auto border-l border-border bg-card/40 p-5">
+        <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-card/40 p-5">
           <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             집계
           </h2>
           <Stat label="총 원본" value={stats ? String(stats.sources) : '–'} />
           <Stat label="총 기억" value={stats ? String(stats.memories) : '–'} />
-          <Stat
-            label="평균 원본/기억"
-            value={stats ? stats.avg_sources_per_memory.toFixed(2) : '–'}
-          />
+          <Stat label="평균 원본/기억" value={stats ? stats.avg_sources_per_memory.toFixed(2) : '–'} />
 
           <div className="mt-6 space-y-2.5 border-t border-border pt-5">
             <Legend className="rounded-full bg-[#7c8cf0]" label="기억 (Relation degree)" />
@@ -115,17 +87,37 @@ export function GraphApp() {
             <Legend dashed label="Relation 기억↔기억" />
           </div>
 
+          <div className="mt-5 flex items-start gap-2 rounded-md bg-secondary/40 p-3 text-xs text-muted-foreground">
+            <MousePointerClick className="mt-0.5 size-3.5 shrink-0" />
+            <span>노드를 클릭하면 그 기억으로 이동합니다. 드래그로 흩고, 휠로 확대·축소.</span>
+          </div>
+
           {truncated && (
-            <p className="mt-5 text-xs leading-relaxed text-amber-400/90">
-              노드 상한을 넘어 일부만 표시합니다. 기억을 클릭해 이웃을 펼치세요.
+            <p className="mt-4 text-xs leading-relaxed text-amber-400/90">
+              노드 상한을 넘어 일부만 표시합니다.
             </p>
           )}
 
-          <p className="mt-5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-            {message}
-          </p>
+          <p className="mt-4 font-mono text-[11px] text-muted-foreground">{message}</p>
 
-          {selection && <SelectionPanel selection={selection} />}
+          {/* Hover preview so you can read a node before clicking through. */}
+          {hovered && (
+            <div className="mt-auto border-t border-border pt-4">
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-semibold">{hovered.kind === 'memory' ? '기억' : '원본'}</span>
+                <span className="break-all font-mono text-[11px] text-primary">{shortId(hovered.id)}</span>
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                {hovered.kind === 'memory'
+                  ? `기억 ${hovered.metric}개와 연결`
+                  : `기억 ${hovered.metric}개로 녹음 · ${scopeLabel(hovered.scope)}`}
+              </p>
+              <p className="mt-2 line-clamp-6 whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/85">
+                {hovered.label}
+              </p>
+              <p className="mt-2 font-mono text-[10px] text-primary">클릭하면 열림 →</p>
+            </div>
+          )}
         </aside>
       </div>
     </div>
@@ -141,15 +133,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   )
 }
 
-function Legend({
-  className,
-  dashed,
-  label,
-}: {
-  className?: string
-  dashed?: boolean
-  label: string
-}) {
+function Legend({ className, dashed, label }: { className?: string; dashed?: boolean; label: string }) {
   return (
     <div className="flex items-center gap-2.5 text-xs text-muted-foreground">
       {dashed ? (
@@ -158,28 +142,6 @@ function Legend({
         <span className={`size-3 shrink-0 ${className}`} />
       )}
       <span>{label}</span>
-    </div>
-  )
-}
-
-function SelectionPanel({ selection }: { selection: Selection }) {
-  const memory = selection.kind === 'memory'
-  return (
-    <div className="mt-5 border-t border-border pt-5">
-      <div className="flex items-baseline gap-2">
-        <span className="text-sm font-semibold">{memory ? '기억' : '원본'}</span>
-        <span className="break-all font-mono text-[11px] text-primary">
-          {shortId(selection.id)}
-        </span>
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        {memory
-          ? `기억 ${selection.metric}개와 연결`
-          : `기억 ${selection.metric}개로 녹음 · ${scopeLabel(selection.scope)}`}
-      </p>
-      <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/85">
-        {selection.label}
-      </p>
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Network } from 'lucide-react'
-import { recall, loadScopes, type RecallResult, type Scope } from '../api'
+import { recall, loadScopes, getMemory, type RecallResult, type Scope } from '../api'
 import { ScopeSelect } from '../ScopeSelect'
 import { MemoryCard } from './MemoryCard'
 
@@ -35,7 +35,22 @@ export function SearchApp() {
 
   useEffect(() => {
     loadScopes().then(setScopes).catch(() => {})
-    runRecall('', '')
+    // Deep links from the graph: ?m=<id> opens one memory, ?scope=<value>
+    // opens recall filtered to a source's scope.
+    const params = new URLSearchParams(window.location.search)
+    const memoryId = params.get('m')
+    const scopeParam = params.get('scope')
+    if (memoryId) {
+      setStatus('그래프에서 연 기억')
+      getMemory(memoryId)
+        .then((m) => setResults([m]))
+        .catch(() => runRecall('', ''))
+    } else if (scopeParam !== null) {
+      setScope(scopeParam)
+      runRecall('', scopeParam)
+    } else {
+      runRecall('', '')
+    }
   }, [runRecall])
 
   function onUpdated(updated: RecallResult) {

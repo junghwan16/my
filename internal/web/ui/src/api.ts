@@ -88,6 +88,12 @@ export async function loadGraph(scope: string): Promise<Graph> {
   return getJSON<Graph>(`/api/graph?scope=${encodeURIComponent(scope)}`)
 }
 
+// getMemory returns one Memory by id, so the graph can deep-link a node into the
+// recall view.
+export async function getMemory(id: string): Promise<RecallResult> {
+  return getJSON<RecallResult>(`/api/memory?id=${encodeURIComponent(id)}`)
+}
+
 // expandMemory fetches one Memory's full neighborhood (its Source and connected
 // Memories), unrestricted by scope, for click-to-expand drilldown.
 export async function expandMemory(id: string): Promise<Graph> {

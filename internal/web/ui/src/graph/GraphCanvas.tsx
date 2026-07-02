@@ -89,7 +89,7 @@ export function toGraphData(graph: Graph): GraphData {
   return { nodes, links }
 }
 
-interface Selection {
+export interface NodeInfo {
   id: string
   kind: string
   label: string
@@ -103,17 +103,20 @@ interface Engine {
   sync: (data: GraphData) => void
 }
 
-interface Props {
-  data: GraphData
-  onSelect: (node: Selection) => void
-  onExpand: (memoryId: string) => void
+interface Callbacks {
+  onHoverNode: (node: NodeInfo | null) => void
+  onOpen: (node: NodeInfo) => void
 }
 
-export function GraphCanvas({ data, onSelect, onExpand }: Props) {
+interface Props extends Callbacks {
+  data: GraphData
+}
+
+export function GraphCanvas({ data, onHoverNode, onOpen }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<Engine | null>(null)
-  const cbRef = useRef({ onSelect, onExpand })
-  cbRef.current = { onSelect, onExpand }
+  const cbRef = useRef<Callbacks>({ onHoverNode, onOpen })
+  cbRef.current = { onHoverNode, onOpen }
   const pendingData = useRef(data)
 
   useEffect(() => {
@@ -166,10 +169,14 @@ export function GraphCanvas({ data, onSelect, onExpand }: Props) {
   )
 }
 
-function createEngine(
-  app: Application,
-  cbRef: React.RefObject<{ onSelect: (n: Selection) => void; onExpand: (id: string) => void }>,
-): Engine {
+function createEngine(app: Application, cbRef: React.RefObject<Callbacks>): Engine {
+  const info = (n: FNode): NodeInfo => ({
+    id: n.id,
+    kind: n.kind,
+    label: n.label,
+    metric: n.metric,
+    scope: n.scope,
+  })
   const world = new Container()
   const linksG = new Graphics()
   const nodeLayer = new Container()
@@ -279,10 +286,12 @@ function createEngine(
     g.on('pointerover', () => {
       hovered = n.id
       draw()
+      cbRef.current.onHoverNode(info(n))
     })
     g.on('pointerout', () => {
       hovered = null
       draw()
+      cbRef.current.onHoverNode(null)
     })
     g.on('pointerdown', (e: FederatedPointerEvent) => startNodeDrag(n, e))
     nodeLayer.addChild(g)
@@ -379,10 +388,8 @@ function createEngine(
       node.fx = null
       node.fy = null
       sim.alphaTarget(0)
-      if (!moved) {
-        cbRef.current.onSelect({ id: node.id, kind: node.kind, label: node.label, metric: node.metric, scope: node.scope })
-        if (node.kind === 'memory') cbRef.current.onExpand(node.id)
-      }
+      // A click (no drag) opens the node in the recall view.
+      if (!moved) cbRef.current.onOpen(info(node))
     }
     panning = false
   }

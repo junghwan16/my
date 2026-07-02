@@ -37,6 +37,7 @@ type recaller interface {
 	Graph(ctx context.Context, scope string, cap int) (memoriespkg.Graph, error)
 	MemoryNeighborhood(ctx context.Context, id memoriespkg.MemoryID) (memoriespkg.Graph, bool, error)
 	EditMemory(ctx context.Context, id memoriespkg.MemoryID, override string) (memoriespkg.RecallResult, bool, error)
+	Get(ctx context.Context, id memoriespkg.MemoryID) (memoriespkg.RecallResult, bool, error)
 }
 
 // compile-time check that *memories.Recaller satisfies the consumed interface.
@@ -89,6 +90,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/scopes", s.handleScopes)
 	mux.HandleFunc("/api/graph", s.handleGraph)
 	mux.HandleFunc("/api/graph/memory", s.handleMemoryNeighborhood)
+	mux.HandleFunc("/api/memory", s.handleMemoryGet)
 	mux.HandleFunc("/api/memory/edit", s.handleMemoryEdit)
 	return mux
 }
@@ -244,6 +246,34 @@ func (s *Server) handleMemoryNeighborhood(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, graph)
+}
+
+// handleMemoryGet returns one Memory by id as a RecallResult, so the graph can
+// deep-link a node to the recall view. A missing id is a client error; an
+// unknown Memory is 404.
+func (s *Server) handleMemoryGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+
+	result, found, err := s.recaller.Get(r.Context(), memoriespkg.MemoryID(id))
+	if err != nil {
+		http.Error(w, "get failed", http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, result)
 }
 
 // editRequest is the /api/memory/edit body: the Memory to edit and the human
